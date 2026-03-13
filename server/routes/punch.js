@@ -7,7 +7,7 @@ const { connectDB, getCluster } = require('../db/couchbase');
 router.post('/punch', async (req, res) => {
   try {
     const collection = await connectDB();
-    const { time, date, timezone, source, label } = req.body;
+    const { time, date, timezone, source, label, user, breakDuration } = req.body;
 
     const id = `punch::${uuidv4()}`;
     const doc = {
@@ -17,8 +17,10 @@ router.post('/punch', async (req, res) => {
       timezone,
       source,
       label: label || 'Punch In',
+      user: user || 'Unknown',
+      breakDuration: breakDuration || null,
       createdAt: new Date().toISOString(),
-    };
+};
 
     await collection.insert(id, doc);
     res.status(201).json({ success: true, id, doc });
