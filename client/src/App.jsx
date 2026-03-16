@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 
 const USERS = ['Ajit Jadhav', 'Kiran Khade', 'Mruda Sogale', 'Sejal Pawar', 'Sandhya Ghuge'];
@@ -42,7 +42,7 @@ function formatDuration(ms) {
 
 const s = {
   app: { minHeight: '100vh', background: '#f8fafc', padding: '24px', fontFamily: "'Segoe UI', sans-serif" },
-  container: { maxWidth: '900px', margin: '0 auto' },
+  container: { maxWidth: '960px', margin: '0 auto' },
   header: { background: '#1e293b', borderRadius: '16px', padding: '24px 28px', marginBottom: '20px', color: '#fff' },
   greeting: { fontSize: '1.6rem', fontWeight: '700', marginBottom: '4px' },
   subtext: { fontSize: '0.9rem', color: '#94a3b8' },
@@ -59,6 +59,7 @@ const s = {
   btnAmber: { padding: '13px', background: '#fef9c3', color: '#854d0e', border: '1px solid #fde047', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' },
   btnBlue: { padding: '13px', background: '#dbeafe', color: '#1e40af', border: '1px solid #93c5fd', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' },
   btnDisabled: { opacity: 0.45, cursor: 'not-allowed' },
+  checkRow: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', color: '#64748b', fontSize: '0.875rem', cursor: 'pointer' },
   manualRow: { display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' },
   input: { flex: '1', minWidth: '140px', padding: '11px 14px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '0.95rem', color: '#1e293b', background: '#f8fafc', outline: 'none' },
   successMsg: { background: '#dcfce7', border: '1px solid #86efac', color: '#166534', borderRadius: '10px', padding: '12px 16px', marginTop: '12px', fontSize: '0.9rem', fontWeight: '600' },
@@ -66,6 +67,9 @@ const s = {
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { padding: '10px 12px', textAlign: 'left', color: '#64748b', fontSize: '0.78rem', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '2px solid #f1f5f9' },
   td: { padding: '12px', color: '#1e293b', fontSize: '0.9rem', borderBottom: '1px solid #f1f5f9', verticalAlign: 'middle' },
+  filterRow: { display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' },
+  filterSelect: { padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#1e293b', background: '#f8fafc', outline: 'none' },
+  cameraBox: { marginBottom: '16px', borderRadius: '12px', overflow: 'hidden', border: '1px solid #e2e8f0', position: 'relative', background: '#0f172a' },
   badge: (type) => {
     const map = {
       'Punch In': { bg: '#dcfce7', color: '#166534' },
@@ -78,9 +82,6 @@ const s = {
   },
   deleteBtn: { background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '8px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' },
   emptyState: { textAlign: 'center', padding: '40px', color: '#94a3b8' },
-  filterRow: { display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' },
-  filterSelect: { padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#1e293b', background: '#f8fafc', outline: 'none' },
-  checkRow: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', color: '#64748b', fontSize: '0.875rem', cursor: 'pointer' },
 };
 
 export default function App() {
@@ -96,6 +97,11 @@ export default function App() {
   const [filterUser, setFilterUser] = useState('All');
   const [filterType, setFilterType] = useState('All');
   const [breakStart, setBreakStart] = useState(null);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [capturedImage, setCapturedImage] = useState(null);
+  const [cameraError, setCameraError] = useState(null);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
 
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(getLocalTime()), 1000);
@@ -114,6 +120,42 @@ export default function App() {
     } finally {
       setFetchLoading(false);
     }
+  }
+
+  async function startCamera() {
+    setCameraError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      setCameraActive(true);
+      setCapturedImage(null);
+    } catch {
+      setCameraError('Camera not available. You can still punch in without a photo.');
+    }
+  }
+
+  function stopCamera() {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    setCameraActive(false);
+  }
+
+  function capturePhoto() {
+    const canvas = document.createElement('canvas');
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    canvas.getContext('2d').drawImage(videoRef.current, 0, 0);
+    const imageBase64 = canvas.toDataURL('image/jpeg', 0.8);
+    setCapturedImage(imageBase64);
+    stopCamera();
+  }
+
+  function retakePhoto() {
+    setCapturedImage(null);
+    startCamera();
   }
 
   async function handleAction(actionType) {
@@ -157,11 +199,13 @@ export default function App() {
         label: actionType,
         user: selectedUser,
         breakDuration,
+        imageBase64: capturedImage || null,
       });
 
-      setMessage({ type: 'success', text: `✅ ${greetingMsg}` });
+      setMessage({ type: 'success', text: `✅ ${greetingMsg}${capturedImage ? ' 📸 Photo saved!' : ''}` });
       setManualTime('');
       setManualDate('');
+      setCapturedImage(null);
       fetchPunches();
     } catch {
       setMessage({ type: 'error', text: 'Failed to save. Please try again.' });
@@ -186,7 +230,7 @@ export default function App() {
   const totalBreaks = punches.filter(p => p.label === 'End Break' && p.breakDuration && p.breakDuration !== '-').length;
 
   const filtered = punches.filter(p => {
-    const userMatch = filterUser === 'All' || p.user === filterUser;
+    const userMatch = filterUser === 'All' || (p.user && p.user === filterUser);
     const typeMatch = filterType === 'All' || p.label === filterType;
     return userMatch && typeMatch;
   });
@@ -195,48 +239,77 @@ export default function App() {
     <div style={s.app}>
       <div style={s.container}>
 
-        {/* Header */}
         <div style={s.header}>
           <div style={s.greeting}>{greeting}, {selectedUser}! 👋</div>
-          <div style={s.subtext}>{currentTime.time} &nbsp;·&nbsp; {currentTime.date} &nbsp;·&nbsp; {currentTime.timezone}</div>
+          <div style={s.subtext}>{currentTime.time} · {currentTime.date} · {currentTime.timezone}</div>
         </div>
 
-        {/* Stats */}
         <div style={s.statsRow}>
-          <div style={s.statBox}>
-            <div style={s.statNum}>{punches.length}</div>
-            <div style={s.statLabel}>Total Records</div>
-          </div>
-          <div style={s.statBox}>
-            <div style={{ ...s.statNum, color: '#166534' }}>{todayCount}</div>
-            <div style={s.statLabel}>Today's Punches</div>
-          </div>
-          <div style={s.statBox}>
-            <div style={{ ...s.statNum, color: '#854d0e' }}>{totalBreaks}</div>
-            <div style={s.statLabel}>Breaks Taken</div>
-          </div>
-          <div style={s.statBox}>
-            <div style={{ ...s.statNum, color: '#1e40af' }}>{USERS.length}</div>
-            <div style={s.statLabel}>Total Users</div>
-          </div>
+          <div style={s.statBox}><div style={s.statNum}>{punches.length}</div><div style={s.statLabel}>Total Records</div></div>
+          <div style={s.statBox}><div style={{ ...s.statNum, color: '#166534' }}>{todayCount}</div><div style={s.statLabel}>Today's Punches</div></div>
+          <div style={s.statBox}><div style={{ ...s.statNum, color: '#854d0e' }}>{totalBreaks}</div><div style={s.statLabel}>Breaks Taken</div></div>
+          <div style={s.statBox}><div style={{ ...s.statNum, color: '#1e40af' }}>{USERS.length}</div><div style={s.statLabel}>Total Users</div></div>
         </div>
 
-        {/* Punch Card */}
         <div style={s.card}>
           <div style={s.sectionTitle}>Record Punch</div>
 
-          {/* User Select */}
           <select style={s.select} value={selectedUser} onChange={e => setSelectedUser(e.target.value)}>
             {USERS.map(u => <option key={u} value={u}>{u}</option>)}
           </select>
 
-          {/* Manual toggle */}
+          {/* Camera Section */}
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
+              {!cameraActive && !capturedImage && (
+                <button style={{ ...s.btnBlue, flex: 'none', padding: '10px 20px' }} onClick={startCamera}>
+                  📷 Open Camera
+                </button>
+              )}
+              {cameraActive && (
+                <button style={{ ...s.btnAmber, flex: 'none', padding: '10px 20px' }} onClick={capturePhoto}>
+                  📸 Capture Photo
+                </button>
+              )}
+              {capturedImage && (
+                <button style={{ ...s.btnBlue, flex: 'none', padding: '10px 20px' }} onClick={retakePhoto}>
+                  🔄 Retake
+                </button>
+              )}
+              {cameraActive && (
+                <button style={{ ...s.btnRed, flex: 'none', padding: '10px 20px' }} onClick={stopCamera}>
+                  ✕ Cancel
+                </button>
+              )}
+            </div>
+
+            {cameraError && (
+              <div style={{ color: '#854d0e', fontSize: '0.85rem', background: '#fef9c3', padding: '8px 12px', borderRadius: '8px', marginBottom: '8px' }}>
+                ⚠️ {cameraError}
+              </div>
+            )}
+
+            {cameraActive && (
+              <div style={s.cameraBox}>
+                <video ref={videoRef} autoPlay playsInline style={{ width: '100%', maxHeight: '280px', display: 'block' }} />
+              </div>
+            )}
+
+            {capturedImage && (
+              <div style={{ ...s.cameraBox, background: '#f8fafc' }}>
+                <img src={capturedImage} alt="Captured" style={{ width: '100%', maxHeight: '280px', objectFit: 'cover', display: 'block' }} />
+                <div style={{ position: 'absolute', top: '8px', right: '8px', background: '#dcfce7', color: '#166534', borderRadius: '20px', padding: '4px 12px', fontSize: '0.78rem', fontWeight: '700' }}>
+                  ✅ Photo Ready
+                </div>
+              </div>
+            )}
+          </div>
+
           <label style={s.checkRow}>
             <input type="checkbox" checked={useManual} onChange={e => setUseManual(e.target.checked)} />
             Enter time manually (if auto-detect fails)
           </label>
 
-          {/* Manual inputs */}
           {useManual && (
             <div style={s.manualRow}>
               <input type="date" style={s.input} value={manualDate} onChange={e => setManualDate(e.target.value)} />
@@ -244,7 +317,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Action Buttons */}
           <div style={s.btnRow}>
             <button style={{ ...s.btnGreen, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleAction('Punch In')} disabled={loading}>
               👊 Punch In
@@ -273,8 +345,6 @@ export default function App() {
         {/* Shift History */}
         <div style={s.card}>
           <div style={s.sectionTitle}>Shift History</div>
-
-          {/* Filters */}
           <div style={s.filterRow}>
             <select style={s.filterSelect} value={filterUser} onChange={e => setFilterUser(e.target.value)}>
               <option value="All">All Users</option>
@@ -292,19 +362,19 @@ export default function App() {
           {fetchLoading ? (
             <div style={s.emptyState}>Loading records...</div>
           ) : filtered.length === 0 ? (
-            <div style={s.emptyState}>No records found. Hit Punch In to get started!</div>
+            <div style={s.emptyState}>No records found.</div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={s.table}>
                 <thead>
                   <tr>
                     <th style={s.th}>#</th>
+                    <th style={s.th}>Photo</th>
                     <th style={s.th}>User</th>
                     <th style={s.th}>Type</th>
                     <th style={s.th}>Time</th>
                     <th style={s.th}>Date</th>
-                    <th style={s.th}>Break Duration</th>
-                    <th style={s.th}>Source</th>
+                    <th style={s.th}>Break</th>
                     <th style={s.th}>Action</th>
                   </tr>
                 </thead>
@@ -312,18 +382,29 @@ export default function App() {
                   {filtered.map((punch, idx) => (
                     <tr key={punch.id} style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
                       <td style={{ ...s.td, color: '#94a3b8', fontSize: '0.82rem' }}>{idx + 1}</td>
+                      <td style={s.td}>
+                        {punch.imageUrl ? (
+                          <img
+                            src={punch.imageUrl}
+                            alt="punch"
+                            style={{ width: '44px', height: '44px', borderRadius: '8px', objectFit: 'cover', border: '1px solid #e2e8f0', cursor: 'pointer' }}
+                            onClick={() => window.open(punch.imageUrl, '_blank')}
+                          />
+                        ) : (
+                          <div style={{ width: '44px', height: '44px', borderRadius: '8px', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}>
+                            👤
+                          </div>
+                        )}
+                      </td>
                       <td style={{ ...s.td, fontWeight: '600' }}>{punch.user || '-'}</td>
                       <td style={s.td}><span style={s.badge(punch.label)}>{punch.label || 'Punch In'}</span></td>
                       <td style={{ ...s.td, fontWeight: '600', color: '#1e40af' }}>{punch.time}</td>
                       <td style={{ ...s.td, fontSize: '0.82rem', color: '#64748b' }}>{punch.date}</td>
                       <td style={{ ...s.td, color: '#854d0e' }}>{punch.breakDuration || '-'}</td>
                       <td style={s.td}>
-                        <span style={{ fontSize: '0.78rem', color: punch.source === 'auto' ? '#166534' : '#854d0e', fontWeight: '600' }}>
-                          {punch.source === 'auto' ? '🟢 Auto' : '✏️ Manual'}
-                        </span>
-                      </td>
-                      <td style={s.td}>
-                        <button style={s.deleteBtn} onClick={() => handleDelete(punch.id)}>Delete</button>
+                        <button style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '8px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }} onClick={() => handleDelete(punch.id)}>
+                          Delete
+                        </button>
                       </td>
                     </tr>
                   ))}
