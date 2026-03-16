@@ -69,13 +69,13 @@ const s = {
   td: { padding: '12px', color: '#1e293b', fontSize: '0.9rem', borderBottom: '1px solid #f1f5f9', verticalAlign: 'middle' },
   filterRow: { display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' },
   filterSelect: { padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#1e293b', background: '#f8fafc', outline: 'none' },
-  overlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px' },
+  overlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.88)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' },
   badge: (type) => {
     const map = {
-      'Punch In': { bg: '#dcfce7', color: '#166534' },
-      'Punch Out': { bg: '#fee2e2', color: '#991b1b' },
+      'Punch In':    { bg: '#dcfce7', color: '#166534' },
+      'Punch Out':   { bg: '#fee2e2', color: '#991b1b' },
       'Start Break': { bg: '#fef9c3', color: '#854d0e' },
-      'End Break': { bg: '#dbeafe', color: '#1e40af' },
+      'End Break':   { bg: '#dbeafe', color: '#1e40af' },
     };
     const c = map[type] || { bg: '#f1f5f9', color: '#475569' };
     return { background: c.bg, color: c.color, borderRadius: '20px', padding: '3px 10px', fontSize: '0.78rem', fontWeight: '600', whiteSpace: 'nowrap' };
@@ -83,87 +83,83 @@ const s = {
 };
 
 export default function App() {
-  const [currentTime, setCurrentTime] = useState(getLocalTime());
+  const [currentTime, setCurrentTime]   = useState(getLocalTime());
   const [selectedUser, setSelectedUser] = useState(USERS[0]);
-  const [useManual, setUseManual] = useState(false);
-  const [manualTime, setManualTime] = useState('');
-  const [manualDate, setManualDate] = useState('');
-  const [punches, setPunches] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [useManual, setUseManual]       = useState(false);
+  const [manualTime, setManualTime]     = useState('');
+  const [manualDate, setManualDate]     = useState('');
+  const [punches, setPunches]           = useState([]);
+  const [loading, setLoading]           = useState(false);
   const [fetchLoading, setFetchLoading] = useState(true);
-  const [message, setMessage] = useState(null);
-  const [filterUser, setFilterUser] = useState('All');
-  const [filterType, setFilterType] = useState('All');
-  const [breakStart, setBreakStart] = useState(null);
+  const [message, setMessage]           = useState(null);
+  const [filterUser, setFilterUser]     = useState('All');
+  const [filterType, setFilterType]     = useState('All');
+  const [breakStart, setBreakStart]     = useState(null);
 
-  // Camera modal state
-  const [showCamera, setShowCamera] = useState(false);
-  const [cameraActive, setCameraActive] = useState(false);
+  // Camera
+  const [showCamera, setShowCamera]       = useState(false);
+  const [cameraActive, setCameraActive]   = useState(false);
   const [capturedImage, setCapturedImage] = useState(null);
-  const [cameraError, setCameraError] = useState(null);
-  const [pendingAction, setPendingAction] = useState(null); // stores 'Punch In' or 'Punch Out'
+  const [cameraError, setCameraError]     = useState(null);
+  const [pendingAction, setPendingAction] = useState(null);
+  const [countdown, setCountdown]         = useState(null);
 
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
+  const videoRef    = useRef(null);
+  const streamRef   = useRef(null);
+  const countdownRef = useRef(null);
 
+  // Live clock
   useEffect(() => {
-    const interval = setInterval(() => setCurrentTime(getLocalTime()), 1000);
-    return () => clearInterval(interval);
+    const id = setInterval(() => setCurrentTime(getLocalTime()), 1000);
+    return () => clearInterval(id);
   }, []);
 
+  // Fetch records on load
   useEffect(() => { fetchPunches(); }, []);
 
-  // Start camera when modal opens
+  // Step 1: when showCamera becomes true → get stream
   useEffect(() => {
     if (showCamera) {
-      openCamera();
+      getCameraStream();
     } else {
       stopCamera();
     }
   }, [showCamera]);
 
-  async function fetchPunches() {
-    try {
-      setFetchLoading(true);
-      const res = await axios.get('/api/punches');
-      setPunches(res.data.punches || []);
-    } catch {
-      setMessage({ type: 'error', text: 'Failed to load records.' });
-    } finally {
-      setFetchLoading(false);
+  // Step 2: when cameraActive becomes true → attach stream to video element
+  useEffect(() => {
+    if (cameraActive && streamRef.current && videoRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(err => console.error('Video play error:', err));
     }
-  }
+  }, [cameraActive]);
 
-  async function openCamera() {
+  async function getCameraStream() {
     setCameraError(null);
     setCapturedImage(null);
+    setCameraActive(false);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
       streamRef.current = stream;
-      // Wait for video element to be ready
-      if (videoRef.current) {
-  videoRef.current.srcObject = stream;
-  videoRef.current.onloadedmetadata = () => {
-    videoRef.current.play();
-    setCameraActive(true);
-  };
-} else {
-  // fallback if ref not ready yet
-  setTimeout(() => {
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.play();
-      setCameraActive(true);
-    }
-  }, 100);
-}
-    } catch {
-      setCameraError('Camera not available. You can still proceed without a photo.');
-      setCameraActive(false);
+      setCameraActive(true); // triggers useEffect above to attach to video
+    } catch (err) {
+      console.error('Camera access error:', err.name, err.message);
+      if (err.name === 'NotAllowedError') {
+        setCameraError('Camera permission denied. Please allow camera access in your browser and try again.');
+      } else if (err.name === 'NotFoundError') {
+        setCameraError('No camera found on this device.');
+      } else {
+        setCameraError('Camera not available. You can still punch in without a photo.');
+      }
     }
   }
 
   function stopCamera() {
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    setCountdown(null);
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
@@ -173,32 +169,46 @@ export default function App() {
 
   function capturePhoto() {
     if (!videoRef.current) return;
+    const video = videoRef.current;
     const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth || 640;
-    canvas.height = videoRef.current.videoHeight || 480;
-    canvas.getContext('2d').drawImage(videoRef.current, 0, 0);
-    const imageBase64 = canvas.toDataURL('image/jpeg', 0.8);
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
     setCapturedImage(imageBase64);
     stopCamera();
   }
 
-  function retakePhoto() {
-    setCapturedImage(null);
-    openCamera();
+  function startCountdown() {
+    setCountdown(3);
+    let count = 3;
+    countdownRef.current = setInterval(() => {
+      count -= 1;
+      if (count <= 0) {
+        clearInterval(countdownRef.current);
+        setCountdown(null);
+        capturePhoto();
+      } else {
+        setCountdown(count);
+      }
+    }, 1000);
   }
 
-  // Called when user clicks Punch In / Punch Out — opens camera first
+  function retakePhoto() {
+    setCapturedImage(null);
+    getCameraStream();
+  }
+
+  // Punch In / Punch Out → open camera first
   function handleActionClick(actionType) {
     if (actionType === 'Punch In' || actionType === 'Punch Out') {
       setPendingAction(actionType);
       setShowCamera(true);
     } else {
-      // Break actions don't need camera
       submitAction(actionType, null);
     }
   }
 
-  // Called after photo is taken (or skipped) — submits the punch
   async function confirmAndSubmit() {
     setShowCamera(false);
     await submitAction(pendingAction, capturedImage);
@@ -206,13 +216,19 @@ export default function App() {
     setPendingAction(null);
   }
 
-  // Called when user skips photo
   async function skipPhotoAndSubmit() {
     setShowCamera(false);
     stopCamera();
     await submitAction(pendingAction, null);
     setCapturedImage(null);
     setPendingAction(null);
+  }
+
+  function cancelCamera() {
+    setShowCamera(false);
+    stopCamera();
+    setPendingAction(null);
+    setCapturedImage(null);
   }
 
   async function submitAction(actionType, imageBase64) {
@@ -236,8 +252,8 @@ export default function App() {
 
       const hour = getLocalTime().hour;
       let greetingMsg = '';
-      if (actionType === 'Punch In') greetingMsg = `${getGreeting(hour, 'punchIn')}, ${selectedUser}!`;
-      if (actionType === 'Punch Out') greetingMsg = `${getGreeting(hour, 'punchOut')}, ${selectedUser}! See you tomorrow.`;
+      if (actionType === 'Punch In')    greetingMsg = `${getGreeting(hour, 'punchIn')}, ${selectedUser}!`;
+      if (actionType === 'Punch Out')   greetingMsg = `${getGreeting(hour, 'punchOut')}, ${selectedUser}! See you tomorrow.`;
       if (actionType === 'Start Break') { setBreakStart(Date.now()); greetingMsg = `Break started for ${selectedUser}.`; }
       if (actionType === 'End Break') {
         const dur = breakStart ? formatDuration(Date.now() - breakStart) : '-';
@@ -270,6 +286,18 @@ export default function App() {
     }
   }
 
+  async function fetchPunches() {
+    try {
+      setFetchLoading(true);
+      const res = await axios.get('/api/punches');
+      setPunches(res.data.punches || []);
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to load records.' });
+    } finally {
+      setFetchLoading(false);
+    }
+  }
+
   async function handleDelete(id) {
     if (!window.confirm('Delete this record?')) return;
     try {
@@ -280,8 +308,8 @@ export default function App() {
     }
   }
 
-  const greeting = getGreeting(currentTime.hour, null);
-  const todayStr = new Date().toDateString();
+  const greeting  = getGreeting(currentTime.hour, null);
+  const todayStr  = new Date().toDateString();
   const todayCount = punches.filter(p => new Date(p.createdAt).toDateString() === todayStr).length;
   const totalBreaks = punches.filter(p => p.label === 'End Break' && p.breakDuration && p.breakDuration !== '-').length;
   const filtered = punches.filter(p => {
@@ -293,33 +321,48 @@ export default function App() {
   return (
     <div style={s.app}>
 
-      {/* ===== CAMERA MODAL ===== */}
+      {/* ── CAMERA MODAL ── */}
       {showCamera && (
         <div style={s.overlay}>
-          <div style={{ background: '#1e293b', borderRadius: '20px', padding: '24px', width: '100%', maxWidth: '480px', textAlign: 'center' }}>
+          <div style={{ background: '#1e293b', borderRadius: '20px', padding: '24px', width: '100%', maxWidth: '500px' }}>
 
-            <div style={{ color: '#fff', fontSize: '1.1rem', fontWeight: '700', marginBottom: '6px' }}>
-              {pendingAction === 'Punch In' ? '👊 Punch In' : '🚪 Punch Out'} — Take a Selfie
-            </div>
-            <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '16px' }}>
-              {selectedUser}
+            {/* Header */}
+            <div style={{ textAlign: 'center', marginBottom: '16px' }}>
+              <div style={{ color: '#fff', fontSize: '1.15rem', fontWeight: '700' }}>
+                {pendingAction === 'Punch In' ? '👊 Punch In' : '🚪 Punch Out'} — Take a Selfie
+              </div>
+              <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '4px' }}>{selectedUser}</div>
             </div>
 
-            {/* Camera error */}
+            {/* Camera error message */}
             {cameraError && (
-              <div style={{ background: '#fef9c3', color: '#854d0e', borderRadius: '10px', padding: '10px 14px', marginBottom: '14px', fontSize: '0.85rem' }}>
+              <div style={{ background: '#fef9c3', color: '#854d0e', borderRadius: '10px', padding: '10px 14px', marginBottom: '14px', fontSize: '0.85rem', textAlign: 'center' }}>
                 ⚠️ {cameraError}
               </div>
             )}
 
-            {/* Live video */}
+            {/* Live video feed */}
             {!capturedImage && (
-              <div style={{ borderRadius: '12px', overflow: 'hidden', marginBottom: '14px', background: '#0f172a', minHeight: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ borderRadius: '14px', overflow: 'hidden', marginBottom: '14px', background: '#0f172a', minHeight: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                 {cameraActive ? (
-                  <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', borderRadius: '12px', display: 'block' }} />
+                  <>
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }}
+                    />
+                    {/* Countdown overlay */}
+                    {countdown !== null && (
+                      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', borderRadius: '14px' }}>
+                        <div style={{ fontSize: '5rem', fontWeight: '900', color: '#fff' }}>{countdown}</div>
+                      </div>
+                    )}
+                  </>
                 ) : (
-                  <div style={{ color: '#475569', fontSize: '0.9rem', padding: '40px' }}>
-                    {cameraError ? '📷 No camera' : '⏳ Starting camera...'}
+                  <div style={{ color: '#475569', fontSize: '0.9rem', textAlign: 'center', padding: '40px' }}>
+                    {cameraError ? '📷 No camera available' : '⏳ Starting camera...'}
                   </div>
                 )}
               </div>
@@ -327,37 +370,46 @@ export default function App() {
 
             {/* Captured photo preview */}
             {capturedImage && (
-              <div style={{ borderRadius: '12px', overflow: 'hidden', marginBottom: '14px', position: 'relative' }}>
-                <img src={capturedImage} alt="selfie" style={{ width: '100%', borderRadius: '12px', display: 'block' }} />
-                <div style={{ position: 'absolute', top: '10px', right: '10px', background: '#dcfce7', color: '#166534', borderRadius: '20px', padding: '4px 12px', fontSize: '0.78rem', fontWeight: '700' }}>
+              <div style={{ borderRadius: '14px', overflow: 'hidden', marginBottom: '14px', position: 'relative' }}>
+                <img src={capturedImage} alt="selfie" style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }} />
+                <div style={{ position: 'absolute', top: '10px', right: '10px', background: '#dcfce7', color: '#166534', borderRadius: '20px', padding: '4px 14px', fontSize: '0.78rem', fontWeight: '700' }}>
                   ✅ Photo Ready
                 </div>
               </div>
             )}
 
-            {/* Action buttons */}
+            {/* Buttons */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {/* Capture button — show only when camera is live */}
-              {cameraActive && !capturedImage && (
-                <button
-                  style={{ padding: '14px', background: '#38bdf8', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }}
-                  onClick={capturePhoto}
-                >
-                  📸 Capture Photo
-                </button>
+
+              {/* Capture / Countdown — show only when live */}
+              {cameraActive && !capturedImage && countdown === null && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <button
+                    style={{ padding: '13px', background: '#38bdf8', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '0.95rem', cursor: 'pointer' }}
+                    onClick={capturePhoto}
+                  >
+                    📸 Capture Now
+                  </button>
+                  <button
+                    style={{ padding: '13px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '0.95rem', cursor: 'pointer' }}
+                    onClick={startCountdown}
+                  >
+                    ⏱ Timer (3s)
+                  </button>
+                </div>
               )}
 
-              {/* Retake button */}
+              {/* Retake */}
               {capturedImage && (
                 <button
-                  style={{ padding: '14px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }}
+                  style={{ padding: '13px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '0.95rem', cursor: 'pointer' }}
                   onClick={retakePhoto}
                 >
-                  🔄 Retake
+                  🔄 Retake Photo
                 </button>
               )}
 
-              {/* Confirm button — show after photo captured */}
+              {/* Confirm submit */}
               {capturedImage && (
                 <button
                   style={{ padding: '14px', background: pendingAction === 'Punch In' ? '#166534' : '#991b1b', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }}
@@ -367,18 +419,18 @@ export default function App() {
                 </button>
               )}
 
-              {/* Skip photo button */}
+              {/* Skip photo */}
               <button
-                style={{ padding: '12px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: '12px', fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer' }}
+                style={{ padding: '12px', background: 'transparent', color: '#94a3b8', border: '1px solid #334155', borderRadius: '12px', fontWeight: '600', fontSize: '0.88rem', cursor: 'pointer' }}
                 onClick={skipPhotoAndSubmit}
               >
                 Skip Photo & {pendingAction}
               </button>
 
-              {/* Cancel button */}
+              {/* Cancel */}
               <button
-                style={{ padding: '10px', background: 'transparent', color: '#475569', border: 'none', borderRadius: '12px', fontWeight: '600', fontSize: '0.85rem', cursor: 'pointer' }}
-                onClick={() => { setShowCamera(false); stopCamera(); setPendingAction(null); }}
+                style={{ padding: '10px', background: 'transparent', color: '#64748b', border: 'none', borderRadius: '12px', fontSize: '0.85rem', cursor: 'pointer' }}
+                onClick={cancelCamera}
               >
                 Cancel
               </button>
@@ -387,14 +439,16 @@ export default function App() {
         </div>
       )}
 
-      {/* ===== MAIN APP ===== */}
+      {/* ── MAIN APP ── */}
       <div style={s.container}>
 
+        {/* Header */}
         <div style={s.header}>
           <div style={s.greeting}>{greeting}, {selectedUser}! 👋</div>
           <div style={s.subtext}>{currentTime.time} · {currentTime.date} · {currentTime.timezone}</div>
         </div>
 
+        {/* Stats */}
         <div style={s.statsRow}>
           <div style={s.statBox}><div style={s.statNum}>{punches.length}</div><div style={s.statLabel}>Total Records</div></div>
           <div style={s.statBox}><div style={{ ...s.statNum, color: '#166534' }}>{todayCount}</div><div style={s.statLabel}>Today's Punches</div></div>
@@ -402,6 +456,7 @@ export default function App() {
           <div style={s.statBox}><div style={{ ...s.statNum, color: '#1e40af' }}>{USERS.length}</div><div style={s.statLabel}>Total Users</div></div>
         </div>
 
+        {/* Punch Card */}
         <div style={s.card}>
           <div style={s.sectionTitle}>Record Punch</div>
 
@@ -449,6 +504,7 @@ export default function App() {
         {/* Shift History */}
         <div style={s.card}>
           <div style={s.sectionTitle}>Shift History</div>
+
           <div style={s.filterRow}>
             <select style={s.filterSelect} value={filterUser} onChange={e => setFilterUser(e.target.value)}>
               <option value="All">All Users</option>
@@ -464,7 +520,7 @@ export default function App() {
           </div>
 
           {fetchLoading ? (
-            <div style={s.emptyState}>Loading records...</div>
+            <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Loading records...</div>
           ) : filtered.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>No records found.</div>
           ) : (
@@ -488,9 +544,17 @@ export default function App() {
                       <td style={{ ...s.td, color: '#94a3b8', fontSize: '0.82rem' }}>{idx + 1}</td>
                       <td style={s.td}>
                         {punch.imageUrl ? (
-                          <img src={punch.imageUrl} alt="punch" style={{ width: '44px', height: '44px', borderRadius: '8px', objectFit: 'cover', border: '1px solid #e2e8f0', cursor: 'pointer' }} onClick={() => window.open(punch.imageUrl, '_blank')} />
+                          <img
+                            src={punch.imageUrl}
+                            alt="punch"
+                            style={{ width: '46px', height: '46px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #e2e8f0', cursor: 'pointer' }}
+                            onClick={() => window.open(punch.imageUrl, '_blank')}
+                            title="Click to view full photo"
+                          />
                         ) : (
-                          <div style={{ width: '44px', height: '44px', borderRadius: '8px', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}>👤</div>
+                          <div style={{ width: '46px', height: '46px', borderRadius: '50%', background: '#f1f5f9', border: '2px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>
+                            👤
+                          </div>
                         )}
                       </td>
                       <td style={{ ...s.td, fontWeight: '600' }}>{punch.user || '-'}</td>
@@ -499,7 +563,10 @@ export default function App() {
                       <td style={{ ...s.td, fontSize: '0.82rem', color: '#64748b' }}>{punch.date}</td>
                       <td style={{ ...s.td, color: '#854d0e' }}>{punch.breakDuration || '-'}</td>
                       <td style={s.td}>
-                        <button style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '8px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }} onClick={() => handleDelete(punch.id)}>
+                        <button
+                          style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '8px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
+                          onClick={() => handleDelete(punch.id)}
+                        >
                           Delete
                         </button>
                       </td>
