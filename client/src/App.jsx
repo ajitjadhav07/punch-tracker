@@ -69,7 +69,7 @@ const s = {
   td: { padding: '12px', color: '#1e293b', fontSize: '0.9rem', borderBottom: '1px solid #f1f5f9', verticalAlign: 'middle' },
   filterRow: { display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' },
   filterSelect: { padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#1e293b', background: '#f8fafc', outline: 'none' },
-  cameraBox: { marginBottom: '16px', borderRadius: '12px', overflow: 'hidden', border: '1px solid #e2e8f0', position: 'relative', background: '#0f172a' },
+  overlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px' },
   badge: (type) => {
     const map = {
       'Punch In': { bg: '#dcfce7', color: '#166534' },
@@ -80,8 +80,6 @@ const s = {
     const c = map[type] || { bg: '#f1f5f9', color: '#475569' };
     return { background: c.bg, color: c.color, borderRadius: '20px', padding: '3px 10px', fontSize: '0.78rem', fontWeight: '600', whiteSpace: 'nowrap' };
   },
-  deleteBtn: { background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '8px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' },
-  emptyState: { textAlign: 'center', padding: '40px', color: '#94a3b8' },
 };
 
 export default function App() {
@@ -97,9 +95,14 @@ export default function App() {
   const [filterUser, setFilterUser] = useState('All');
   const [filterType, setFilterType] = useState('All');
   const [breakStart, setBreakStart] = useState(null);
+
+  // Camera modal state
+  const [showCamera, setShowCamera] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [capturedImage, setCapturedImage] = useState(null);
   const [cameraError, setCameraError] = useState(null);
+  const [pendingAction, setPendingAction] = useState(null); // stores 'Punch In' or 'Punch Out'
+
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -109,6 +112,15 @@ export default function App() {
   }, []);
 
   useEffect(() => { fetchPunches(); }, []);
+
+  // Start camera when modal opens
+  useEffect(() => {
+    if (showCamera) {
+      openCamera();
+    } else {
+      stopCamera();
+    }
+  }, [showCamera]);
 
   async function fetchPunches() {
     try {
@@ -122,16 +134,22 @@ export default function App() {
     }
   }
 
-  async function startCamera() {
+  async function openCamera() {
     setCameraError(null);
+    setCapturedImage(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
       streamRef.current = stream;
-      if (videoRef.current) videoRef.current.srcObject = stream;
-      setCameraActive(true);
-      setCapturedImage(null);
+      // Wait for video element to be ready
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          setCameraActive(true);
+        }
+      }, 300);
     } catch {
-      setCameraError('Camera not available. You can still punch in without a photo.');
+      setCameraError('Camera not available. You can still proceed without a photo.');
+      setCameraActive(false);
     }
   }
 
@@ -144,9 +162,10 @@ export default function App() {
   }
 
   function capturePhoto() {
+    if (!videoRef.current) return;
     const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
+    canvas.width = videoRef.current.videoWidth || 640;
+    canvas.height = videoRef.current.videoHeight || 480;
     canvas.getContext('2d').drawImage(videoRef.current, 0, 0);
     const imageBase64 = canvas.toDataURL('image/jpeg', 0.8);
     setCapturedImage(imageBase64);
@@ -155,10 +174,38 @@ export default function App() {
 
   function retakePhoto() {
     setCapturedImage(null);
-    startCamera();
+    openCamera();
   }
 
-  async function handleAction(actionType) {
+  // Called when user clicks Punch In / Punch Out — opens camera first
+  function handleActionClick(actionType) {
+    if (actionType === 'Punch In' || actionType === 'Punch Out') {
+      setPendingAction(actionType);
+      setShowCamera(true);
+    } else {
+      // Break actions don't need camera
+      submitAction(actionType, null);
+    }
+  }
+
+  // Called after photo is taken (or skipped) — submits the punch
+  async function confirmAndSubmit() {
+    setShowCamera(false);
+    await submitAction(pendingAction, capturedImage);
+    setCapturedImage(null);
+    setPendingAction(null);
+  }
+
+  // Called when user skips photo
+  async function skipPhotoAndSubmit() {
+    setShowCamera(false);
+    stopCamera();
+    await submitAction(pendingAction, null);
+    setCapturedImage(null);
+    setPendingAction(null);
+  }
+
+  async function submitAction(actionType, imageBase64) {
     setLoading(true);
     setMessage(null);
     try {
@@ -199,13 +246,12 @@ export default function App() {
         label: actionType,
         user: selectedUser,
         breakDuration,
-        imageBase64: capturedImage || null,
+        imageBase64: imageBase64 || null,
       });
 
-      setMessage({ type: 'success', text: `✅ ${greetingMsg}${capturedImage ? ' 📸 Photo saved!' : ''}` });
+      setMessage({ type: 'success', text: `✅ ${greetingMsg}${imageBase64 ? ' 📸 Photo saved!' : ''}` });
       setManualTime('');
       setManualDate('');
-      setCapturedImage(null);
       fetchPunches();
     } catch {
       setMessage({ type: 'error', text: 'Failed to save. Please try again.' });
@@ -228,7 +274,6 @@ export default function App() {
   const todayStr = new Date().toDateString();
   const todayCount = punches.filter(p => new Date(p.createdAt).toDateString() === todayStr).length;
   const totalBreaks = punches.filter(p => p.label === 'End Break' && p.breakDuration && p.breakDuration !== '-').length;
-
   const filtered = punches.filter(p => {
     const userMatch = filterUser === 'All' || (p.user && p.user === filterUser);
     const typeMatch = filterType === 'All' || p.label === filterType;
@@ -237,6 +282,102 @@ export default function App() {
 
   return (
     <div style={s.app}>
+
+      {/* ===== CAMERA MODAL ===== */}
+      {showCamera && (
+        <div style={s.overlay}>
+          <div style={{ background: '#1e293b', borderRadius: '20px', padding: '24px', width: '100%', maxWidth: '480px', textAlign: 'center' }}>
+
+            <div style={{ color: '#fff', fontSize: '1.1rem', fontWeight: '700', marginBottom: '6px' }}>
+              {pendingAction === 'Punch In' ? '👊 Punch In' : '🚪 Punch Out'} — Take a Selfie
+            </div>
+            <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '16px' }}>
+              {selectedUser}
+            </div>
+
+            {/* Camera error */}
+            {cameraError && (
+              <div style={{ background: '#fef9c3', color: '#854d0e', borderRadius: '10px', padding: '10px 14px', marginBottom: '14px', fontSize: '0.85rem' }}>
+                ⚠️ {cameraError}
+              </div>
+            )}
+
+            {/* Live video */}
+            {!capturedImage && (
+              <div style={{ borderRadius: '12px', overflow: 'hidden', marginBottom: '14px', background: '#0f172a', minHeight: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {cameraActive ? (
+                  <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', borderRadius: '12px', display: 'block' }} />
+                ) : (
+                  <div style={{ color: '#475569', fontSize: '0.9rem', padding: '40px' }}>
+                    {cameraError ? '📷 No camera' : '⏳ Starting camera...'}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Captured photo preview */}
+            {capturedImage && (
+              <div style={{ borderRadius: '12px', overflow: 'hidden', marginBottom: '14px', position: 'relative' }}>
+                <img src={capturedImage} alt="selfie" style={{ width: '100%', borderRadius: '12px', display: 'block' }} />
+                <div style={{ position: 'absolute', top: '10px', right: '10px', background: '#dcfce7', color: '#166534', borderRadius: '20px', padding: '4px 12px', fontSize: '0.78rem', fontWeight: '700' }}>
+                  ✅ Photo Ready
+                </div>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {/* Capture button — show only when camera is live */}
+              {cameraActive && !capturedImage && (
+                <button
+                  style={{ padding: '14px', background: '#38bdf8', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }}
+                  onClick={capturePhoto}
+                >
+                  📸 Capture Photo
+                </button>
+              )}
+
+              {/* Retake button */}
+              {capturedImage && (
+                <button
+                  style={{ padding: '14px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }}
+                  onClick={retakePhoto}
+                >
+                  🔄 Retake
+                </button>
+              )}
+
+              {/* Confirm button — show after photo captured */}
+              {capturedImage && (
+                <button
+                  style={{ padding: '14px', background: pendingAction === 'Punch In' ? '#166534' : '#991b1b', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }}
+                  onClick={confirmAndSubmit}
+                >
+                  {pendingAction === 'Punch In' ? '👊 Confirm Punch In' : '🚪 Confirm Punch Out'}
+                </button>
+              )}
+
+              {/* Skip photo button */}
+              <button
+                style={{ padding: '12px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: '12px', fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer' }}
+                onClick={skipPhotoAndSubmit}
+              >
+                Skip Photo & {pendingAction}
+              </button>
+
+              {/* Cancel button */}
+              <button
+                style={{ padding: '10px', background: 'transparent', color: '#475569', border: 'none', borderRadius: '12px', fontWeight: '600', fontSize: '0.85rem', cursor: 'pointer' }}
+                onClick={() => { setShowCamera(false); stopCamera(); setPendingAction(null); }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MAIN APP ===== */}
       <div style={s.container}>
 
         <div style={s.header}>
@@ -258,53 +399,6 @@ export default function App() {
             {USERS.map(u => <option key={u} value={u}>{u}</option>)}
           </select>
 
-          {/* Camera Section */}
-          <div style={{ marginBottom: '16px' }}>
-            <div style={{ display: 'flex', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
-              {!cameraActive && !capturedImage && (
-                <button style={{ ...s.btnBlue, flex: 'none', padding: '10px 20px' }} onClick={startCamera}>
-                  📷 Open Camera
-                </button>
-              )}
-              {cameraActive && (
-                <button style={{ ...s.btnAmber, flex: 'none', padding: '10px 20px' }} onClick={capturePhoto}>
-                  📸 Capture Photo
-                </button>
-              )}
-              {capturedImage && (
-                <button style={{ ...s.btnBlue, flex: 'none', padding: '10px 20px' }} onClick={retakePhoto}>
-                  🔄 Retake
-                </button>
-              )}
-              {cameraActive && (
-                <button style={{ ...s.btnRed, flex: 'none', padding: '10px 20px' }} onClick={stopCamera}>
-                  ✕ Cancel
-                </button>
-              )}
-            </div>
-
-            {cameraError && (
-              <div style={{ color: '#854d0e', fontSize: '0.85rem', background: '#fef9c3', padding: '8px 12px', borderRadius: '8px', marginBottom: '8px' }}>
-                ⚠️ {cameraError}
-              </div>
-            )}
-
-            {cameraActive && (
-              <div style={s.cameraBox}>
-                <video ref={videoRef} autoPlay playsInline style={{ width: '100%', maxHeight: '280px', display: 'block' }} />
-              </div>
-            )}
-
-            {capturedImage && (
-              <div style={{ ...s.cameraBox, background: '#f8fafc' }}>
-                <img src={capturedImage} alt="Captured" style={{ width: '100%', maxHeight: '280px', objectFit: 'cover', display: 'block' }} />
-                <div style={{ position: 'absolute', top: '8px', right: '8px', background: '#dcfce7', color: '#166534', borderRadius: '20px', padding: '4px 12px', fontSize: '0.78rem', fontWeight: '700' }}>
-                  ✅ Photo Ready
-                </div>
-              </div>
-            )}
-          </div>
-
           <label style={s.checkRow}>
             <input type="checkbox" checked={useManual} onChange={e => setUseManual(e.target.checked)} />
             Enter time manually (if auto-detect fails)
@@ -318,18 +412,18 @@ export default function App() {
           )}
 
           <div style={s.btnRow}>
-            <button style={{ ...s.btnGreen, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleAction('Punch In')} disabled={loading}>
+            <button style={{ ...s.btnGreen, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('Punch In')} disabled={loading}>
               👊 Punch In
             </button>
-            <button style={{ ...s.btnRed, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleAction('Punch Out')} disabled={loading}>
+            <button style={{ ...s.btnRed, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('Punch Out')} disabled={loading}>
               🚪 Punch Out
             </button>
             {!breakStart ? (
-              <button style={{ ...s.btnAmber, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleAction('Start Break')} disabled={loading}>
+              <button style={{ ...s.btnAmber, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('Start Break')} disabled={loading}>
                 ☕ Start Break
               </button>
             ) : (
-              <button style={{ ...s.btnBlue, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleAction('End Break')} disabled={loading}>
+              <button style={{ ...s.btnBlue, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('End Break')} disabled={loading}>
                 ▶ End Break
               </button>
             )}
@@ -362,7 +456,7 @@ export default function App() {
           {fetchLoading ? (
             <div style={s.emptyState}>Loading records...</div>
           ) : filtered.length === 0 ? (
-            <div style={s.emptyState}>No records found.</div>
+            <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>No records found.</div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={s.table}>
@@ -384,16 +478,9 @@ export default function App() {
                       <td style={{ ...s.td, color: '#94a3b8', fontSize: '0.82rem' }}>{idx + 1}</td>
                       <td style={s.td}>
                         {punch.imageUrl ? (
-                          <img
-                            src={punch.imageUrl}
-                            alt="punch"
-                            style={{ width: '44px', height: '44px', borderRadius: '8px', objectFit: 'cover', border: '1px solid #e2e8f0', cursor: 'pointer' }}
-                            onClick={() => window.open(punch.imageUrl, '_blank')}
-                          />
+                          <img src={punch.imageUrl} alt="punch" style={{ width: '44px', height: '44px', borderRadius: '8px', objectFit: 'cover', border: '1px solid #e2e8f0', cursor: 'pointer' }} onClick={() => window.open(punch.imageUrl, '_blank')} />
                         ) : (
-                          <div style={{ width: '44px', height: '44px', borderRadius: '8px', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}>
-                            👤
-                          </div>
+                          <div style={{ width: '44px', height: '44px', borderRadius: '8px', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}>👤</div>
                         )}
                       </td>
                       <td style={{ ...s.td, fontWeight: '600' }}>{punch.user || '-'}</td>
