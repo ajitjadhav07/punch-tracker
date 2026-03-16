@@ -141,12 +141,22 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
       streamRef.current = stream;
       // Wait for video element to be ready
-      setTimeout(() => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          setCameraActive(true);
-        }
-      }, 300);
+      if (videoRef.current) {
+  videoRef.current.srcObject = stream;
+  videoRef.current.onloadedmetadata = () => {
+    videoRef.current.play();
+    setCameraActive(true);
+  };
+} else {
+  // fallback if ref not ready yet
+  setTimeout(() => {
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play();
+      setCameraActive(true);
+    }
+  }, 100);
+}
     } catch {
       setCameraError('Camera not available. You can still proceed without a photo.');
       setCameraActive(false);
