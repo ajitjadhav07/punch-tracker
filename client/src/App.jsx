@@ -32,17 +32,68 @@ function getGreeting(hour, type) {
 function formatDuration(ms) {
   if (!ms || ms <= 0) return '-';
   const totalSec = Math.floor(ms / 1000);
-  const hrs = Math.floor(totalSec / 3600);
+  const hrs  = Math.floor(totalSec / 3600);
   const mins = Math.floor((totalSec % 3600) / 60);
   const secs = totalSec % 60;
-  if (hrs > 0) return `${hrs}h ${mins}m`;
+  if (hrs > 0)  return `${hrs}h ${mins}m`;
   if (mins > 0) return `${mins}m ${secs}s`;
   return `${secs}s`;
 }
 
+// Compute shift duration per Punch Out row
+function computeShiftDurations(punches) {
+  return punches.map(punch => {
+    if (punch.label !== 'Punch Out') return { ...punch, shiftDuration: null };
+
+    // Find closest Punch In before this Punch Out for same user same date
+    const matchingIn = punches
+      .filter(p =>
+        p.label === 'Punch In' &&
+        p.user  === punch.user &&
+        p.date  === punch.date &&
+        new Date(p.createdAt) < new Date(punch.createdAt)
+      )
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+
+    if (!matchingIn) return { ...punch, shiftDuration: null };
+
+    const diffMs   = new Date(punch.createdAt) - new Date(matchingIn.createdAt);
+    const totalSec = Math.floor(diffMs / 1000);
+    const hrs      = Math.floor(totalSec / 3600);
+    const mins     = Math.floor((totalSec % 3600) / 60);
+    const secs     = totalSec % 60;
+
+    let shiftDuration = '';
+    if (hrs > 0)       shiftDuration = `${hrs}h ${mins}m`;
+    else if (mins > 0) shiftDuration = `${mins}m ${secs}s`;
+    else               shiftDuration = `${secs}s`;
+
+    return { ...punch, shiftDuration };
+  });
+}
+
+// Daily total hours per user
+function computeDailySummary(punches) {
+  const summary = {};
+  const sorted  = [...punches].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  sorted.forEach(punch => {
+    const key = `${punch.user}__${punch.date}`;
+    if (!summary[key]) summary[key] = { user: punch.user, date: punch.date, totalMs: 0, lastPunchIn: null };
+    if (punch.label === 'Punch In')  summary[key].lastPunchIn = new Date(punch.createdAt);
+    if (punch.label === 'Punch Out' && summary[key].lastPunchIn) {
+      summary[key].totalMs += new Date(punch.createdAt) - summary[key].lastPunchIn;
+      summary[key].lastPunchIn = null;
+    }
+  });
+
+  return Object.values(summary).filter(s => s.totalMs > 0)
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
 const s = {
   app: { minHeight: '100vh', background: '#f8fafc', padding: '24px', fontFamily: "'Segoe UI', sans-serif" },
-  container: { maxWidth: '960px', margin: '0 auto' },
+  container: { maxWidth: '1000px', margin: '0 auto' },
   header: { background: '#1e293b', borderRadius: '16px', padding: '24px 28px', marginBottom: '20px', color: '#fff' },
   greeting: { fontSize: '1.6rem', fontWeight: '700', marginBottom: '4px' },
   subtext: { fontSize: '0.9rem', color: '#94a3b8' },
@@ -54,16 +105,16 @@ const s = {
   sectionTitle: { fontSize: '0.78rem', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '16px' },
   select: { width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '1rem', color: '#1e293b', background: '#f8fafc', marginBottom: '16px', outline: 'none' },
   btnRow: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '12px' },
-  btnGreen: { padding: '13px', background: '#dcfce7', color: '#166534', border: '1px solid #86efac', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' },
-  btnRed: { padding: '13px', background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' },
-  btnAmber: { padding: '13px', background: '#fef9c3', color: '#854d0e', border: '1px solid #fde047', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' },
-  btnBlue: { padding: '13px', background: '#dbeafe', color: '#1e40af', border: '1px solid #93c5fd', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' },
+  btnGreen:    { padding: '13px', background: '#dcfce7', color: '#166534', border: '1px solid #86efac', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' },
+  btnRed:      { padding: '13px', background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' },
+  btnAmber:    { padding: '13px', background: '#fef9c3', color: '#854d0e', border: '1px solid #fde047', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' },
+  btnBlue:     { padding: '13px', background: '#dbeafe', color: '#1e40af', border: '1px solid #93c5fd', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' },
   btnDisabled: { opacity: 0.45, cursor: 'not-allowed' },
   checkRow: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', color: '#64748b', fontSize: '0.875rem', cursor: 'pointer' },
   manualRow: { display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' },
   input: { flex: '1', minWidth: '140px', padding: '11px 14px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '0.95rem', color: '#1e293b', background: '#f8fafc', outline: 'none' },
   successMsg: { background: '#dcfce7', border: '1px solid #86efac', color: '#166534', borderRadius: '10px', padding: '12px 16px', marginTop: '12px', fontSize: '0.9rem', fontWeight: '600' },
-  errorMsg: { background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '10px', padding: '12px 16px', marginTop: '12px', fontSize: '0.9rem' },
+  errorMsg:   { background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b',  borderRadius: '10px', padding: '12px 16px', marginTop: '12px', fontSize: '0.9rem' },
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { padding: '10px 12px', textAlign: 'left', color: '#64748b', fontSize: '0.78rem', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '2px solid #f1f5f9' },
   td: { padding: '12px', color: '#1e293b', fontSize: '0.9rem', borderBottom: '1px solid #f1f5f9', verticalAlign: 'middle' },
@@ -80,6 +131,16 @@ const s = {
     const c = map[type] || { bg: '#f1f5f9', color: '#475569' };
     return { background: c.bg, color: c.color, borderRadius: '20px', padding: '3px 10px', fontSize: '0.78rem', fontWeight: '600', whiteSpace: 'nowrap' };
   },
+  tabBtn: (active) => ({
+    padding: '8px 20px',
+    borderRadius: '8px',
+    border: 'none',
+    fontWeight: '700',
+    fontSize: '0.88rem',
+    cursor: 'pointer',
+    background: active ? '#1e293b' : '#f1f5f9',
+    color:      active ? '#fff'    : '#64748b',
+  }),
 };
 
 export default function App() {
@@ -95,6 +156,7 @@ export default function App() {
   const [filterUser, setFilterUser]     = useState('All');
   const [filterType, setFilterType]     = useState('All');
   const [breakStart, setBreakStart]     = useState(null);
+  const [activeTab, setActiveTab]       = useState('history');
 
   // Camera
   const [showCamera, setShowCamera]       = useState(false);
@@ -104,35 +166,40 @@ export default function App() {
   const [pendingAction, setPendingAction] = useState(null);
   const [countdown, setCountdown]         = useState(null);
 
-  const videoRef    = useRef(null);
-  const streamRef   = useRef(null);
+  const videoRef     = useRef(null);
+  const streamRef    = useRef(null);
   const countdownRef = useRef(null);
 
-  // Live clock
   useEffect(() => {
     const id = setInterval(() => setCurrentTime(getLocalTime()), 1000);
     return () => clearInterval(id);
   }, []);
 
-  // Fetch records on load
   useEffect(() => { fetchPunches(); }, []);
 
-  // Step 1: when showCamera becomes true → get stream
   useEffect(() => {
-    if (showCamera) {
-      getCameraStream();
-    } else {
-      stopCamera();
-    }
+    if (showCamera) getCameraStream();
+    else stopCamera();
   }, [showCamera]);
 
-  // Step 2: when cameraActive becomes true → attach stream to video element
   useEffect(() => {
     if (cameraActive && streamRef.current && videoRef.current) {
       videoRef.current.srcObject = streamRef.current;
-      videoRef.current.play().catch(err => console.error('Video play error:', err));
+      videoRef.current.play().catch(console.error);
     }
   }, [cameraActive]);
+
+  async function fetchPunches() {
+    try {
+      setFetchLoading(true);
+      const res = await axios.get('/api/punches');
+      setPunches(res.data.punches || []);
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to load records.' });
+    } finally {
+      setFetchLoading(false);
+    }
+  }
 
   async function getCameraStream() {
     setCameraError(null);
@@ -144,16 +211,11 @@ export default function App() {
         audio: false,
       });
       streamRef.current = stream;
-      setCameraActive(true); // triggers useEffect above to attach to video
+      setCameraActive(true);
     } catch (err) {
-      console.error('Camera access error:', err.name, err.message);
-      if (err.name === 'NotAllowedError') {
-        setCameraError('Camera permission denied. Please allow camera access in your browser and try again.');
-      } else if (err.name === 'NotFoundError') {
-        setCameraError('No camera found on this device.');
-      } else {
-        setCameraError('Camera not available. You can still punch in without a photo.');
-      }
+      if (err.name === 'NotAllowedError')  setCameraError('Camera permission denied. Please allow camera in browser settings.');
+      else if (err.name === 'NotFoundError') setCameraError('No camera found on this device.');
+      else setCameraError('Camera not available. You can still punch in without a photo.');
     }
   }
 
@@ -169,13 +231,12 @@ export default function App() {
 
   function capturePhoto() {
     if (!videoRef.current) return;
-    const video = videoRef.current;
+    const video  = videoRef.current;
     const canvas = document.createElement('canvas');
     canvas.width  = video.videoWidth  || 640;
     canvas.height = video.videoHeight || 480;
     canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-    const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
-    setCapturedImage(imageBase64);
+    setCapturedImage(canvas.toDataURL('image/jpeg', 0.85));
     stopCamera();
   }
 
@@ -184,22 +245,13 @@ export default function App() {
     let count = 3;
     countdownRef.current = setInterval(() => {
       count -= 1;
-      if (count <= 0) {
-        clearInterval(countdownRef.current);
-        setCountdown(null);
-        capturePhoto();
-      } else {
-        setCountdown(count);
-      }
+      if (count <= 0) { clearInterval(countdownRef.current); setCountdown(null); capturePhoto(); }
+      else setCountdown(count);
     }, 1000);
   }
 
-  function retakePhoto() {
-    setCapturedImage(null);
-    getCameraStream();
-  }
+  function retakePhoto() { setCapturedImage(null); getCameraStream(); }
 
-  // Punch In / Punch Out → open camera first
   function handleActionClick(actionType) {
     if (actionType === 'Punch In' || actionType === 'Punch Out') {
       setPendingAction(actionType);
@@ -255,7 +307,7 @@ export default function App() {
       if (actionType === 'Punch In')    greetingMsg = `${getGreeting(hour, 'punchIn')}, ${selectedUser}!`;
       if (actionType === 'Punch Out')   greetingMsg = `${getGreeting(hour, 'punchOut')}, ${selectedUser}! See you tomorrow.`;
       if (actionType === 'Start Break') { setBreakStart(Date.now()); greetingMsg = `Break started for ${selectedUser}.`; }
-      if (actionType === 'End Break') {
+      if (actionType === 'End Break')   {
         const dur = breakStart ? formatDuration(Date.now() - breakStart) : '-';
         greetingMsg = `Break ended for ${selectedUser}. Duration: ${dur}`;
         setBreakStart(null);
@@ -265,14 +317,11 @@ export default function App() {
         ? formatDuration(Date.now() - breakStart) : null;
 
       await axios.post('/api/punch', {
-        time: timeVal,
-        date: dateVal,
+        time: timeVal, date: dateVal,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         source: useManual ? 'manual' : 'auto',
-        label: actionType,
-        user: selectedUser,
-        breakDuration,
-        imageBase64: imageBase64 || null,
+        label: actionType, user: selectedUser,
+        breakDuration, imageBase64: imageBase64 || null,
       });
 
       setMessage({ type: 'success', text: `✅ ${greetingMsg}${imageBase64 ? ' 📸 Photo saved!' : ''}` });
@@ -286,18 +335,6 @@ export default function App() {
     }
   }
 
-  async function fetchPunches() {
-    try {
-      setFetchLoading(true);
-      const res = await axios.get('/api/punches');
-      setPunches(res.data.punches || []);
-    } catch {
-      setMessage({ type: 'error', text: 'Failed to load records.' });
-    } finally {
-      setFetchLoading(false);
-    }
-  }
-
   async function handleDelete(id) {
     if (!window.confirm('Delete this record?')) return;
     try {
@@ -308,15 +345,21 @@ export default function App() {
     }
   }
 
-  const greeting  = getGreeting(currentTime.hour, null);
-  const todayStr  = new Date().toDateString();
-  const todayCount = punches.filter(p => new Date(p.createdAt).toDateString() === todayStr).length;
-  const totalBreaks = punches.filter(p => p.label === 'End Break' && p.breakDuration && p.breakDuration !== '-').length;
-  const filtered = punches.filter(p => {
+  const greeting     = getGreeting(currentTime.hour, null);
+  const todayStr     = new Date().toDateString();
+  const todayCount   = punches.filter(p => new Date(p.createdAt).toDateString() === todayStr).length;
+  const totalBreaks  = punches.filter(p => p.label === 'End Break' && p.breakDuration && p.breakDuration !== '-').length;
+
+  // Compute shift durations on frontend
+  const punchesWithDuration = computeShiftDurations(punches);
+
+  const filtered = punchesWithDuration.filter(p => {
     const userMatch = filterUser === 'All' || (p.user && p.user === filterUser);
     const typeMatch = filterType === 'All' || p.label === filterType;
     return userMatch && typeMatch;
   });
+
+  const summaryRows = computeDailySummary(punches);
 
   return (
     <div style={s.app}>
@@ -325,8 +368,6 @@ export default function App() {
       {showCamera && (
         <div style={s.overlay}>
           <div style={{ background: '#1e293b', borderRadius: '20px', padding: '24px', width: '100%', maxWidth: '500px' }}>
-
-            {/* Header */}
             <div style={{ textAlign: 'center', marginBottom: '16px' }}>
               <div style={{ color: '#fff', fontSize: '1.15rem', fontWeight: '700' }}>
                 {pendingAction === 'Punch In' ? '👊 Punch In' : '🚪 Punch Out'} — Take a Selfie
@@ -334,26 +375,17 @@ export default function App() {
               <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '4px' }}>{selectedUser}</div>
             </div>
 
-            {/* Camera error message */}
             {cameraError && (
               <div style={{ background: '#fef9c3', color: '#854d0e', borderRadius: '10px', padding: '10px 14px', marginBottom: '14px', fontSize: '0.85rem', textAlign: 'center' }}>
                 ⚠️ {cameraError}
               </div>
             )}
 
-            {/* Live video feed */}
             {!capturedImage && (
               <div style={{ borderRadius: '14px', overflow: 'hidden', marginBottom: '14px', background: '#0f172a', minHeight: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                 {cameraActive ? (
                   <>
-                    <video
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }}
-                    />
-                    {/* Countdown overlay */}
+                    <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }} />
                     {countdown !== null && (
                       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', borderRadius: '14px' }}>
                         <div style={{ fontSize: '5rem', fontWeight: '900', color: '#fff' }}>{countdown}</div>
@@ -368,7 +400,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Captured photo preview */}
             {capturedImage && (
               <div style={{ borderRadius: '14px', overflow: 'hidden', marginBottom: '14px', position: 'relative' }}>
                 <img src={capturedImage} alt="selfie" style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }} />
@@ -378,60 +409,31 @@ export default function App() {
               </div>
             )}
 
-            {/* Buttons */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-
-              {/* Capture / Countdown — show only when live */}
               {cameraActive && !capturedImage && countdown === null && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  <button
-                    style={{ padding: '13px', background: '#38bdf8', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '0.95rem', cursor: 'pointer' }}
-                    onClick={capturePhoto}
-                  >
+                  <button style={{ padding: '13px', background: '#38bdf8', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }} onClick={capturePhoto}>
                     📸 Capture Now
                   </button>
-                  <button
-                    style={{ padding: '13px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '0.95rem', cursor: 'pointer' }}
-                    onClick={startCountdown}
-                  >
+                  <button style={{ padding: '13px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }} onClick={startCountdown}>
                     ⏱ Timer (3s)
                   </button>
                 </div>
               )}
-
-              {/* Retake */}
               {capturedImage && (
-                <button
-                  style={{ padding: '13px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '0.95rem', cursor: 'pointer' }}
-                  onClick={retakePhoto}
-                >
+                <button style={{ padding: '13px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }} onClick={retakePhoto}>
                   🔄 Retake Photo
                 </button>
               )}
-
-              {/* Confirm submit */}
               {capturedImage && (
-                <button
-                  style={{ padding: '14px', background: pendingAction === 'Punch In' ? '#166534' : '#991b1b', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }}
-                  onClick={confirmAndSubmit}
-                >
+                <button style={{ padding: '14px', background: pendingAction === 'Punch In' ? '#166534' : '#991b1b', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }} onClick={confirmAndSubmit}>
                   {pendingAction === 'Punch In' ? '👊 Confirm Punch In' : '🚪 Confirm Punch Out'}
                 </button>
               )}
-
-              {/* Skip photo */}
-              <button
-                style={{ padding: '12px', background: 'transparent', color: '#94a3b8', border: '1px solid #334155', borderRadius: '12px', fontWeight: '600', fontSize: '0.88rem', cursor: 'pointer' }}
-                onClick={skipPhotoAndSubmit}
-              >
+              <button style={{ padding: '12px', background: 'transparent', color: '#94a3b8', border: '1px solid #334155', borderRadius: '12px', fontWeight: '600', cursor: 'pointer' }} onClick={skipPhotoAndSubmit}>
                 Skip Photo & {pendingAction}
               </button>
-
-              {/* Cancel */}
-              <button
-                style={{ padding: '10px', background: 'transparent', color: '#64748b', border: 'none', borderRadius: '12px', fontSize: '0.85rem', cursor: 'pointer' }}
-                onClick={cancelCamera}
-              >
+              <button style={{ padding: '10px', background: 'transparent', color: '#64748b', border: 'none', borderRadius: '12px', fontSize: '0.85rem', cursor: 'pointer' }} onClick={cancelCamera}>
                 Cancel
               </button>
             </div>
@@ -459,124 +461,144 @@ export default function App() {
         {/* Punch Card */}
         <div style={s.card}>
           <div style={s.sectionTitle}>Record Punch</div>
-
           <select style={s.select} value={selectedUser} onChange={e => setSelectedUser(e.target.value)}>
             {USERS.map(u => <option key={u} value={u}>{u}</option>)}
           </select>
-
           <label style={s.checkRow}>
             <input type="checkbox" checked={useManual} onChange={e => setUseManual(e.target.checked)} />
             Enter time manually (if auto-detect fails)
           </label>
-
           {useManual && (
             <div style={s.manualRow}>
               <input type="date" style={s.input} value={manualDate} onChange={e => setManualDate(e.target.value)} />
               <input type="time" step="1" style={s.input} value={manualTime} onChange={e => setManualTime(e.target.value)} />
             </div>
           )}
-
           <div style={s.btnRow}>
-            <button style={{ ...s.btnGreen, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('Punch In')} disabled={loading}>
-              👊 Punch In
-            </button>
-            <button style={{ ...s.btnRed, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('Punch Out')} disabled={loading}>
-              🚪 Punch Out
-            </button>
-            {!breakStart ? (
-              <button style={{ ...s.btnAmber, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('Start Break')} disabled={loading}>
-                ☕ Start Break
-              </button>
+            <button style={{ ...s.btnGreen,  ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('Punch In')}    disabled={loading}>👊 Punch In</button>
+            <button style={{ ...s.btnRed,    ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('Punch Out')}   disabled={loading}>🚪 Punch Out</button>
+            {!breakStart
+              ? <button style={{ ...s.btnAmber, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('Start Break')} disabled={loading}>☕ Start Break</button>
+              : <button style={{ ...s.btnBlue,  ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('End Break')}   disabled={loading}>▶ End Break</button>
+            }
+          </div>
+          {message && <div style={message.type === 'success' ? s.successMsg : s.errorMsg}>{message.text}</div>}
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
+          <button style={s.tabBtn(activeTab === 'history')} onClick={() => setActiveTab('history')}>📋 Shift History</button>
+          <button style={s.tabBtn(activeTab === 'summary')} onClick={() => setActiveTab('summary')}>📊 Daily Summary</button>
+        </div>
+
+        {/* ── SHIFT HISTORY TAB ── */}
+        {activeTab === 'history' && (
+          <div style={s.card}>
+            <div style={s.sectionTitle}>Shift History</div>
+            <div style={s.filterRow}>
+              <select style={s.filterSelect} value={filterUser} onChange={e => setFilterUser(e.target.value)}>
+                <option value="All">All Users</option>
+                {USERS.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+              <select style={s.filterSelect} value={filterType} onChange={e => setFilterType(e.target.value)}>
+                <option value="All">All Types</option>
+                <option>Punch In</option>
+                <option>Punch Out</option>
+                <option>Start Break</option>
+                <option>End Break</option>
+              </select>
+            </div>
+
+            {fetchLoading ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Loading records...</div>
+            ) : filtered.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>No records found.</div>
             ) : (
-              <button style={{ ...s.btnBlue, ...(loading ? s.btnDisabled : {}) }} onClick={() => handleActionClick('End Break')} disabled={loading}>
-                ▶ End Break
-              </button>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      <th style={s.th}>#</th>
+                      <th style={s.th}>User</th>
+                      <th style={s.th}>Type</th>
+                      <th style={s.th}>Time</th>
+                      <th style={s.th}>Date</th>
+                      <th style={s.th}>Shift Duration</th>
+                      <th style={s.th}>Break</th>
+                      <th style={s.th}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((punch, idx) => (
+                      <tr key={punch.id} style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
+                        <td style={{ ...s.td, color: '#94a3b8', fontSize: '0.82rem' }}>{idx + 1}</td>
+                        <td style={{ ...s.td, fontWeight: '600' }}>{punch.user || '-'}</td>
+                        <td style={s.td}><span style={s.badge(punch.label)}>{punch.label || 'Punch In'}</span></td>
+                        <td style={{ ...s.td, fontWeight: '600', color: '#1e40af' }}>{punch.time}</td>
+                        <td style={{ ...s.td, fontSize: '0.82rem', color: '#64748b' }}>{punch.date}</td>
+                        <td style={s.td}>
+                          {punch.shiftDuration ? (
+                            <span style={{ background: '#dcfce7', color: '#166534', borderRadius: '20px', padding: '3px 12px', fontSize: '0.82rem', fontWeight: '700' }}>
+                              ⏱ {punch.shiftDuration}
+                            </span>
+                          ) : (
+                            <span style={{ color: '#94a3b8' }}>-</span>
+                          )}
+                        </td>
+                        <td style={{ ...s.td, color: '#854d0e' }}>{punch.breakDuration || '-'}</td>
+                        <td style={s.td}>
+                          <button style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '8px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
+                            onClick={() => handleDelete(punch.id)}>
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
+        )}
 
-          {message && (
-            <div style={message.type === 'success' ? s.successMsg : s.errorMsg}>
-              {message.text}
-            </div>
-          )}
-        </div>
-
-        {/* Shift History */}
-        <div style={s.card}>
-          <div style={s.sectionTitle}>Shift History</div>
-
-          <div style={s.filterRow}>
-            <select style={s.filterSelect} value={filterUser} onChange={e => setFilterUser(e.target.value)}>
-              <option value="All">All Users</option>
-              {USERS.map(u => <option key={u} value={u}>{u}</option>)}
-            </select>
-            <select style={s.filterSelect} value={filterType} onChange={e => setFilterType(e.target.value)}>
-              <option value="All">All Types</option>
-              <option>Punch In</option>
-              <option>Punch Out</option>
-              <option>Start Break</option>
-              <option>End Break</option>
-            </select>
-          </div>
-
-          {fetchLoading ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Loading records...</div>
-          ) : filtered.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>No records found.</div>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    <th style={s.th}>#</th>
-                    <th style={s.th}>Photo</th>
-                    <th style={s.th}>User</th>
-                    <th style={s.th}>Type</th>
-                    <th style={s.th}>Time</th>
-                    <th style={s.th}>Date</th>
-                    <th style={s.th}>Break</th>
-                    <th style={s.th}>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((punch, idx) => (
-                    <tr key={punch.id} style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
-                      <td style={{ ...s.td, color: '#94a3b8', fontSize: '0.82rem' }}>{idx + 1}</td>
-                      <td style={s.td}>
-                        {punch.imageUrl ? (
-                          <img
-                            src={punch.imageUrl}
-                            alt="punch"
-                            style={{ width: '46px', height: '46px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #e2e8f0', cursor: 'pointer' }}
-                            onClick={() => window.open(punch.imageUrl, '_blank')}
-                            title="Click to view full photo"
-                          />
-                        ) : (
-                          <div style={{ width: '46px', height: '46px', borderRadius: '50%', background: '#f1f5f9', border: '2px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>
-                            👤
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ ...s.td, fontWeight: '600' }}>{punch.user || '-'}</td>
-                      <td style={s.td}><span style={s.badge(punch.label)}>{punch.label || 'Punch In'}</span></td>
-                      <td style={{ ...s.td, fontWeight: '600', color: '#1e40af' }}>{punch.time}</td>
-                      <td style={{ ...s.td, fontSize: '0.82rem', color: '#64748b' }}>{punch.date}</td>
-                      <td style={{ ...s.td, color: '#854d0e' }}>{punch.breakDuration || '-'}</td>
-                      <td style={s.td}>
-                        <button
-                          style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '8px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
-                          onClick={() => handleDelete(punch.id)}
-                        >
-                          Delete
-                        </button>
-                      </td>
+        {/* ── DAILY SUMMARY TAB ── */}
+        {activeTab === 'summary' && (
+          <div style={s.card}>
+            <div style={s.sectionTitle}>Daily Hours Summary</div>
+            {summaryRows.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
+                No completed shifts yet. Punch In then Punch Out to see summary.
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      <th style={s.th}>#</th>
+                      <th style={s.th}>User</th>
+                      <th style={s.th}>Date</th>
+                      <th style={s.th}>Total Hours Worked</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+                  </thead>
+                  <tbody>
+                    {summaryRows.map((row, idx) => (
+                      <tr key={`${row.user}__${row.date}`} style={{ background: idx % 2 === 0 ? '#fff' : '#f8fafc' }}>
+                        <td style={{ ...s.td, color: '#94a3b8' }}>{idx + 1}</td>
+                        <td style={{ ...s.td, fontWeight: '700' }}>{row.user}</td>
+                        <td style={{ ...s.td, color: '#64748b' }}>{row.date}</td>
+                        <td style={s.td}>
+                          <span style={{ background: '#dbeafe', color: '#1e40af', borderRadius: '20px', padding: '4px 14px', fontWeight: '700', fontSize: '0.88rem' }}>
+                            🕐 {formatDuration(row.totalMs)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
       </div>
     </div>
