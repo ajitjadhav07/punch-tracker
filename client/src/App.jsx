@@ -40,12 +40,9 @@ function formatDuration(ms) {
   return `${secs}s`;
 }
 
-// Compute shift duration per Punch Out row
 function computeShiftDurations(punches) {
   return punches.map(punch => {
     if (punch.label !== 'Punch Out') return { ...punch, shiftDuration: null };
-
-    // Find closest Punch In before this Punch Out for same user same date
     const matchingIn = punches
       .filter(p =>
         p.label === 'Punch In' &&
@@ -62,21 +59,17 @@ function computeShiftDurations(punches) {
     const hrs      = Math.floor(totalSec / 3600);
     const mins     = Math.floor((totalSec % 3600) / 60);
     const secs     = totalSec % 60;
-
     let shiftDuration = '';
     if (hrs > 0)       shiftDuration = `${hrs}h ${mins}m`;
     else if (mins > 0) shiftDuration = `${mins}m ${secs}s`;
     else               shiftDuration = `${secs}s`;
-
     return { ...punch, shiftDuration };
   });
 }
 
-// Daily total hours per user
 function computeDailySummary(punches) {
   const summary = {};
   const sorted  = [...punches].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-
   sorted.forEach(punch => {
     const key = `${punch.user}__${punch.date}`;
     if (!summary[key]) summary[key] = { user: punch.user, date: punch.date, totalMs: 0, lastPunchIn: null };
@@ -86,7 +79,6 @@ function computeDailySummary(punches) {
       summary[key].lastPunchIn = null;
     }
   });
-
   return Object.values(summary).filter(s => s.totalMs > 0)
     .sort((a, b) => b.date.localeCompare(a.date));
 }
@@ -114,7 +106,7 @@ const s = {
   manualRow: { display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' },
   input: { flex: '1', minWidth: '140px', padding: '11px 14px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '0.95rem', color: '#1e293b', background: '#f8fafc', outline: 'none' },
   successMsg: { background: '#dcfce7', border: '1px solid #86efac', color: '#166534', borderRadius: '10px', padding: '12px 16px', marginTop: '12px', fontSize: '0.9rem', fontWeight: '600' },
-  errorMsg:   { background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b',  borderRadius: '10px', padding: '12px 16px', marginTop: '12px', fontSize: '0.9rem' },
+  errorMsg:   { background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '10px', padding: '12px 16px', marginTop: '12px', fontSize: '0.9rem' },
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { padding: '10px 12px', textAlign: 'left', color: '#64748b', fontSize: '0.78rem', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '2px solid #f1f5f9' },
   td: { padding: '12px', color: '#1e293b', fontSize: '0.9rem', borderBottom: '1px solid #f1f5f9', verticalAlign: 'middle' },
@@ -213,9 +205,12 @@ export default function App() {
       streamRef.current = stream;
       setCameraActive(true);
     } catch (err) {
-      if (err.name === 'NotAllowedError')  setCameraError('Camera permission denied. Please allow camera in browser settings.');
-      else if (err.name === 'NotFoundError') setCameraError('No camera found on this device.');
-      else setCameraError('Camera not available. You can still punch in without a photo.');
+      if (err.name === 'NotAllowedError')
+        setCameraError('Camera permission denied. Click the camera icon in your browser address bar and select Allow.');
+      else if (err.name === 'NotFoundError')
+        setCameraError('No camera found on this device. A camera is required to punch in/out.');
+      else
+        setCameraError('Camera unavailable. Please check your camera and try again.');
     }
   }
 
@@ -245,12 +240,20 @@ export default function App() {
     let count = 3;
     countdownRef.current = setInterval(() => {
       count -= 1;
-      if (count <= 0) { clearInterval(countdownRef.current); setCountdown(null); capturePhoto(); }
-      else setCountdown(count);
+      if (count <= 0) {
+        clearInterval(countdownRef.current);
+        setCountdown(null);
+        capturePhoto();
+      } else {
+        setCountdown(count);
+      }
     }, 1000);
   }
 
-  function retakePhoto() { setCapturedImage(null); getCameraStream(); }
+  function retakePhoto() {
+    setCapturedImage(null);
+    getCameraStream();
+  }
 
   function handleActionClick(actionType) {
     if (actionType === 'Punch In' || actionType === 'Punch Out') {
@@ -262,21 +265,17 @@ export default function App() {
   }
 
   async function confirmAndSubmit() {
+    // Block if no photo taken
+    if (!capturedImage) return;
     setShowCamera(false);
     await submitAction(pendingAction, capturedImage);
     setCapturedImage(null);
     setPendingAction(null);
   }
 
-  async function skipPhotoAndSubmit() {
-    setShowCamera(false);
-    stopCamera();
-    await submitAction(pendingAction, null);
-    setCapturedImage(null);
-    setPendingAction(null);
-  }
-
   function cancelCamera() {
+    // Only allowed when camera has error
+    if (!cameraError) return;
     setShowCamera(false);
     stopCamera();
     setPendingAction(null);
@@ -307,7 +306,7 @@ export default function App() {
       if (actionType === 'Punch In')    greetingMsg = `${getGreeting(hour, 'punchIn')}, ${selectedUser}!`;
       if (actionType === 'Punch Out')   greetingMsg = `${getGreeting(hour, 'punchOut')}, ${selectedUser}! See you tomorrow.`;
       if (actionType === 'Start Break') { setBreakStart(Date.now()); greetingMsg = `Break started for ${selectedUser}.`; }
-      if (actionType === 'End Break')   {
+      if (actionType === 'End Break') {
         const dur = breakStart ? formatDuration(Date.now() - breakStart) : '-';
         greetingMsg = `Break ended for ${selectedUser}. Duration: ${dur}`;
         setBreakStart(null);
@@ -345,20 +344,16 @@ export default function App() {
     }
   }
 
-  const greeting     = getGreeting(currentTime.hour, null);
-  const todayStr     = new Date().toDateString();
-  const todayCount   = punches.filter(p => new Date(p.createdAt).toDateString() === todayStr).length;
-  const totalBreaks  = punches.filter(p => p.label === 'End Break' && p.breakDuration && p.breakDuration !== '-').length;
-
-  // Compute shift durations on frontend
+  const greeting    = getGreeting(currentTime.hour, null);
+  const todayStr    = new Date().toDateString();
+  const todayCount  = punches.filter(p => new Date(p.createdAt).toDateString() === todayStr).length;
+  const totalBreaks = punches.filter(p => p.label === 'End Break' && p.breakDuration && p.breakDuration !== '-').length;
   const punchesWithDuration = computeShiftDurations(punches);
-
   const filtered = punchesWithDuration.filter(p => {
     const userMatch = filterUser === 'All' || (p.user && p.user === filterUser);
     const typeMatch = filterType === 'All' || p.label === filterType;
     return userMatch && typeMatch;
   });
-
   const summaryRows = computeDailySummary(punches);
 
   return (
@@ -368,24 +363,39 @@ export default function App() {
       {showCamera && (
         <div style={s.overlay}>
           <div style={{ background: '#1e293b', borderRadius: '20px', padding: '24px', width: '100%', maxWidth: '500px' }}>
+
+            {/* Title */}
             <div style={{ textAlign: 'center', marginBottom: '16px' }}>
               <div style={{ color: '#fff', fontSize: '1.15rem', fontWeight: '700' }}>
                 {pendingAction === 'Punch In' ? '👊 Punch In' : '🚪 Punch Out'} — Take a Selfie
               </div>
               <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '4px' }}>{selectedUser}</div>
+              <div style={{ color: '#f87171', fontSize: '0.78rem', marginTop: '6px', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', padding: '4px 10px', display: 'inline-block' }}>
+                📸 Selfie is required to proceed
+              </div>
             </div>
 
+            {/* Camera error state */}
             {cameraError && (
-              <div style={{ background: '#fef9c3', color: '#854d0e', borderRadius: '10px', padding: '10px 14px', marginBottom: '14px', fontSize: '0.85rem', textAlign: 'center' }}>
-                ⚠️ {cameraError}
+              <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#f87171', borderRadius: '12px', padding: '16px', marginBottom: '14px', textAlign: 'center' }}>
+                <div style={{ fontSize: '2rem', marginBottom: '8px' }}>📷</div>
+                <div style={{ fontWeight: '700', marginBottom: '6px', fontSize: '0.95rem' }}>Camera Required</div>
+                <div style={{ fontSize: '0.82rem', lineHeight: '1.5' }}>{cameraError}</div>
               </div>
             )}
 
+            {/* Live video */}
             {!capturedImage && (
               <div style={{ borderRadius: '14px', overflow: 'hidden', marginBottom: '14px', background: '#0f172a', minHeight: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                 {cameraActive ? (
                   <>
-                    <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }} />
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }}
+                    />
                     {countdown !== null && (
                       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', borderRadius: '14px' }}>
                         <div style={{ fontSize: '5rem', fontWeight: '900', color: '#fff' }}>{countdown}</div>
@@ -393,13 +403,16 @@ export default function App() {
                     )}
                   </>
                 ) : (
-                  <div style={{ color: '#475569', fontSize: '0.9rem', textAlign: 'center', padding: '40px' }}>
-                    {cameraError ? '📷 No camera available' : '⏳ Starting camera...'}
-                  </div>
+                  !cameraError && (
+                    <div style={{ color: '#475569', fontSize: '0.9rem', textAlign: 'center', padding: '40px' }}>
+                      ⏳ Starting camera...
+                    </div>
+                  )
                 )}
               </div>
             )}
 
+            {/* Captured photo preview */}
             {capturedImage && (
               <div style={{ borderRadius: '14px', overflow: 'hidden', marginBottom: '14px', position: 'relative' }}>
                 <img src={capturedImage} alt="selfie" style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }} />
@@ -409,33 +422,57 @@ export default function App() {
               </div>
             )}
 
+            {/* Buttons */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+
+              {/* Capture / Timer buttons — live camera only */}
               {cameraActive && !capturedImage && countdown === null && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  <button style={{ padding: '13px', background: '#38bdf8', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }} onClick={capturePhoto}>
+                  <button
+                    style={{ padding: '13px', background: '#38bdf8', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }}
+                    onClick={capturePhoto}
+                  >
                     📸 Capture Now
                   </button>
-                  <button style={{ padding: '13px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }} onClick={startCountdown}>
+                  <button
+                    style={{ padding: '13px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }}
+                    onClick={startCountdown}
+                  >
                     ⏱ Timer (3s)
                   </button>
                 </div>
               )}
+
+              {/* Retake button */}
               {capturedImage && (
-                <button style={{ padding: '13px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }} onClick={retakePhoto}>
+                <button
+                  style={{ padding: '13px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }}
+                  onClick={retakePhoto}
+                >
                   🔄 Retake Photo
                 </button>
               )}
+
+              {/* Confirm — only after photo taken */}
               {capturedImage && (
-                <button style={{ padding: '14px', background: pendingAction === 'Punch In' ? '#166534' : '#991b1b', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }} onClick={confirmAndSubmit}>
+                <button
+                  style={{ padding: '14px', background: pendingAction === 'Punch In' ? '#166534' : '#991b1b', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }}
+                  onClick={confirmAndSubmit}
+                >
                   {pendingAction === 'Punch In' ? '👊 Confirm Punch In' : '🚪 Confirm Punch Out'}
                 </button>
               )}
-              <button style={{ padding: '12px', background: 'transparent', color: '#94a3b8', border: '1px solid #334155', borderRadius: '12px', fontWeight: '600', cursor: 'pointer' }} onClick={skipPhotoAndSubmit}>
-                Skip Photo & {pendingAction}
-              </button>
-              <button style={{ padding: '10px', background: 'transparent', color: '#64748b', border: 'none', borderRadius: '12px', fontSize: '0.85rem', cursor: 'pointer' }} onClick={cancelCamera}>
-                Cancel
-              </button>
+
+              {/* Cancel ONLY if camera has error — no other way out */}
+              {cameraError && (
+                <button
+                  style={{ padding: '11px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: '12px', fontSize: '0.85rem', cursor: 'pointer' }}
+                  onClick={cancelCamera}
+                >
+                  Cancel — Go Back
+                </button>
+              )}
+
             </div>
           </div>
         </div>
@@ -453,7 +490,7 @@ export default function App() {
         {/* Stats */}
         <div style={s.statsRow}>
           <div style={s.statBox}><div style={s.statNum}>{punches.length}</div><div style={s.statLabel}>Total Records</div></div>
-          <div style={s.statBox}><div style={{ ...s.statNum, color: '#166534' }}>{todayCount}</div><div style={s.statLabel}>Today's Punches</div></div>
+          <div style={s.statBox}><div style={{ ...s.statNum, color: '#166634' }}>{todayCount}</div><div style={s.statLabel}>Today's Punches</div></div>
           <div style={s.statBox}><div style={{ ...s.statNum, color: '#854d0e' }}>{totalBreaks}</div><div style={s.statLabel}>Breaks Taken</div></div>
           <div style={s.statBox}><div style={{ ...s.statNum, color: '#1e40af' }}>{USERS.length}</div><div style={s.statLabel}>Total Users</div></div>
         </div>
@@ -508,7 +545,6 @@ export default function App() {
                 <option>End Break</option>
               </select>
             </div>
-
             {fetchLoading ? (
               <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Loading records...</div>
             ) : filtered.length === 0 ? (
@@ -541,9 +577,7 @@ export default function App() {
                             <span style={{ background: '#dcfce7', color: '#166534', borderRadius: '20px', padding: '3px 12px', fontSize: '0.82rem', fontWeight: '700' }}>
                               ⏱ {punch.shiftDuration}
                             </span>
-                          ) : (
-                            <span style={{ color: '#94a3b8' }}>-</span>
-                          )}
+                          ) : <span style={{ color: '#94a3b8' }}>-</span>}
                         </td>
                         <td style={{ ...s.td, color: '#854d0e' }}>{punch.breakDuration || '-'}</td>
                         <td style={s.td}>
