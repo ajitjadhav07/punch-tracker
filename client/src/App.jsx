@@ -51,9 +51,7 @@ function computeShiftDurations(punches) {
         new Date(p.createdAt) < new Date(punch.createdAt)
       )
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
-
     if (!matchingIn) return { ...punch, shiftDuration: null };
-
     const diffMs   = new Date(punch.createdAt) - new Date(matchingIn.createdAt);
     const totalSec = Math.floor(diffMs / 1000);
     const hrs      = Math.floor(totalSec / 3600);
@@ -124,12 +122,8 @@ const s = {
     return { background: c.bg, color: c.color, borderRadius: '20px', padding: '3px 10px', fontSize: '0.78rem', fontWeight: '600', whiteSpace: 'nowrap' };
   },
   tabBtn: (active) => ({
-    padding: '8px 20px',
-    borderRadius: '8px',
-    border: 'none',
-    fontWeight: '700',
-    fontSize: '0.88rem',
-    cursor: 'pointer',
+    padding: '8px 20px', borderRadius: '8px', border: 'none',
+    fontWeight: '700', fontSize: '0.88rem', cursor: 'pointer',
     background: active ? '#1e293b' : '#f1f5f9',
     color:      active ? '#fff'    : '#64748b',
   }),
@@ -150,7 +144,6 @@ export default function App() {
   const [breakStart, setBreakStart]     = useState(null);
   const [activeTab, setActiveTab]       = useState('history');
 
-  // Camera
   const [showCamera, setShowCamera]       = useState(false);
   const [cameraActive, setCameraActive]   = useState(false);
   const [capturedImage, setCapturedImage] = useState(null);
@@ -208,7 +201,7 @@ export default function App() {
       if (err.name === 'NotAllowedError')
         setCameraError('Camera permission denied. Click the camera icon in your browser address bar and select Allow.');
       else if (err.name === 'NotFoundError')
-        setCameraError('No camera found on this device. A camera is required to punch in/out.');
+        setCameraError('No camera found on this device.');
       else
         setCameraError('Camera unavailable. Please check your camera and try again.');
     }
@@ -255,6 +248,13 @@ export default function App() {
     getCameraStream();
   }
 
+  function cancelCamera() {
+    setShowCamera(false);
+    stopCamera();
+    setPendingAction(null);
+    setCapturedImage(null);
+  }
+
   function handleActionClick(actionType) {
     if (actionType === 'Punch In' || actionType === 'Punch Out') {
       setPendingAction(actionType);
@@ -265,21 +265,11 @@ export default function App() {
   }
 
   async function confirmAndSubmit() {
-    // Block if no photo taken
     if (!capturedImage) return;
     setShowCamera(false);
     await submitAction(pendingAction, capturedImage);
     setCapturedImage(null);
     setPendingAction(null);
-  }
-
-  function cancelCamera() {
-    // Only allowed when camera has error
-    if (!cameraError) return;
-    setShowCamera(false);
-    stopCamera();
-    setPendingAction(null);
-    setCapturedImage(null);
   }
 
   async function submitAction(actionType, imageBase64) {
@@ -370,17 +360,14 @@ export default function App() {
                 {pendingAction === 'Punch In' ? '👊 Punch In' : '🚪 Punch Out'} — Take a Selfie
               </div>
               <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '4px' }}>{selectedUser}</div>
-              <div style={{ color: '#f87171', fontSize: '0.78rem', marginTop: '6px', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', padding: '4px 10px', display: 'inline-block' }}>
-                📸 Selfie is required to proceed
-              </div>
             </div>
 
-            {/* Camera error state */}
+            {/* Camera error */}
             {cameraError && (
-              <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#f87171', borderRadius: '12px', padding: '16px', marginBottom: '14px', textAlign: 'center' }}>
-                <div style={{ fontSize: '2rem', marginBottom: '8px' }}>📷</div>
-                <div style={{ fontWeight: '700', marginBottom: '6px', fontSize: '0.95rem' }}>Camera Required</div>
-                <div style={{ fontSize: '0.82rem', lineHeight: '1.5' }}>{cameraError}</div>
+              <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#f87171', borderRadius: '12px', padding: '14px', marginBottom: '14px', textAlign: 'center', fontSize: '0.85rem' }}>
+                <div style={{ fontSize: '1.8rem', marginBottom: '6px' }}>📷</div>
+                <div style={{ fontWeight: '700', marginBottom: '4px' }}>Camera Required</div>
+                <div>{cameraError}</div>
               </div>
             )}
 
@@ -389,13 +376,8 @@ export default function App() {
               <div style={{ borderRadius: '14px', overflow: 'hidden', marginBottom: '14px', background: '#0f172a', minHeight: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                 {cameraActive ? (
                   <>
-                    <video
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }}
-                    />
+                    <video ref={videoRef} autoPlay playsInline muted
+                      style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }} />
                     {countdown !== null && (
                       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', borderRadius: '14px' }}>
                         <div style={{ fontSize: '5rem', fontWeight: '900', color: '#fff' }}>{countdown}</div>
@@ -404,7 +386,7 @@ export default function App() {
                   </>
                 ) : (
                   !cameraError && (
-                    <div style={{ color: '#475569', fontSize: '0.9rem', textAlign: 'center', padding: '40px' }}>
+                    <div style={{ color: '#475569', fontSize: '0.9rem', padding: '40px' }}>
                       ⏳ Starting camera...
                     </div>
                   )
@@ -415,63 +397,53 @@ export default function App() {
             {/* Captured photo preview */}
             {capturedImage && (
               <div style={{ borderRadius: '14px', overflow: 'hidden', marginBottom: '14px', position: 'relative' }}>
-                <img src={capturedImage} alt="selfie" style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }} />
+                <img src={capturedImage} alt="selfie"
+                  style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }} />
                 <div style={{ position: 'absolute', top: '10px', right: '10px', background: '#dcfce7', color: '#166534', borderRadius: '20px', padding: '4px 14px', fontSize: '0.78rem', fontWeight: '700' }}>
                   ✅ Photo Ready
                 </div>
               </div>
             )}
 
-            {/* Buttons */}
+            {/* ── BUTTONS ── */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
 
-              {/* Capture / Timer buttons — live camera only */}
+              {/* Capture Now + Timer — when camera is live */}
               {cameraActive && !capturedImage && countdown === null && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  <button
-                    style={{ padding: '13px', background: '#38bdf8', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }}
-                    onClick={capturePhoto}
-                  >
+                  <button style={{ padding: '13px', background: '#38bdf8', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }}
+                    onClick={capturePhoto}>
                     📸 Capture Now
                   </button>
-                  <button
-                    style={{ padding: '13px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }}
-                    onClick={startCountdown}
-                  >
+                  <button style={{ padding: '13px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }}
+                    onClick={startCountdown}>
                     ⏱ Timer (3s)
                   </button>
                 </div>
               )}
 
-              {/* Retake button */}
+              {/* Retake — after photo taken */}
               {capturedImage && (
-                <button
-                  style={{ padding: '13px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }}
-                  onClick={retakePhoto}
-                >
+                <button style={{ padding: '13px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }}
+                  onClick={retakePhoto}>
                   🔄 Retake Photo
                 </button>
               )}
 
-              {/* Confirm — only after photo taken */}
+              {/* Confirm — after photo taken */}
               {capturedImage && (
                 <button
                   style={{ padding: '14px', background: pendingAction === 'Punch In' ? '#166534' : '#991b1b', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }}
-                  onClick={confirmAndSubmit}
-                >
+                  onClick={confirmAndSubmit}>
                   {pendingAction === 'Punch In' ? '👊 Confirm Punch In' : '🚪 Confirm Punch Out'}
                 </button>
               )}
 
-              {/* Cancel ONLY if camera has error — no other way out */}
-              {cameraError && (
-                <button
-                  style={{ padding: '11px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: '12px', fontSize: '0.85rem', cursor: 'pointer' }}
-                  onClick={cancelCamera}
-                >
-                  Cancel — Go Back
-                </button>
-              )}
+              {/* Cancel — always visible to close popup */}
+              <button style={{ padding: '11px', background: 'transparent', color: '#94a3b8', border: '1px solid #334155', borderRadius: '12px', fontWeight: '600', fontSize: '0.88rem', cursor: 'pointer' }}
+                onClick={cancelCamera}>
+                Cancel
+              </button>
 
             </div>
           </div>
@@ -490,7 +462,7 @@ export default function App() {
         {/* Stats */}
         <div style={s.statsRow}>
           <div style={s.statBox}><div style={s.statNum}>{punches.length}</div><div style={s.statLabel}>Total Records</div></div>
-          <div style={s.statBox}><div style={{ ...s.statNum, color: '#166634' }}>{todayCount}</div><div style={s.statLabel}>Today's Punches</div></div>
+          <div style={s.statBox}><div style={{ ...s.statNum, color: '#166534' }}>{todayCount}</div><div style={s.statLabel}>Today's Punches</div></div>
           <div style={s.statBox}><div style={{ ...s.statNum, color: '#854d0e' }}>{totalBreaks}</div><div style={s.statLabel}>Breaks Taken</div></div>
           <div style={s.statBox}><div style={{ ...s.statNum, color: '#1e40af' }}>{USERS.length}</div><div style={s.statLabel}>Total Users</div></div>
         </div>
@@ -582,9 +554,7 @@ export default function App() {
                         <td style={{ ...s.td, color: '#854d0e' }}>{punch.breakDuration || '-'}</td>
                         <td style={s.td}>
                           <button style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '8px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
-                            onClick={() => handleDelete(punch.id)}>
-                            Delete
-                          </button>
+                            onClick={() => handleDelete(punch.id)}>Delete</button>
                         </td>
                       </tr>
                     ))}
