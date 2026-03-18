@@ -3,6 +3,8 @@ import axios from 'axios';
 
 const USERS = ['Ajit Jadhav', 'Kiran Khade', 'Mruda Sogale', 'Sejal Pawar', 'Sandhya Ghuge'];
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const LATE_HOUR = 9;
+const LATE_MINUTE = 30;
 
 function getLocalTime() {
   const now = new Date();
@@ -41,6 +43,73 @@ function formatDuration(ms) {
   return `${secs}s`;
 }
 
+function isLateArrival(timeStr) {
+  if (!timeStr) return false;
+  try {
+    const lower = timeStr.toLowerCase();
+    const isPM  = lower.includes('pm');
+    const isAM  = lower.includes('am');
+    const clean = timeStr.replace(/[apmAMP\s]/g, '');
+    const parts = clean.split(':');
+    let hour    = parseInt(parts[0]);
+    const min   = parseInt(parts[1]) || 0;
+    if (isPM && hour !== 12) hour += 12;
+    if (isAM && hour === 12) hour = 0;
+    if (hour > 12) return false; // PM punch = not late arrival
+    return hour > LATE_HOUR || (hour === LATE_HOUR && min > LATE_MINUTE);
+  } catch { return false; }
+}
+
+// Compute who is currently IN vs OUT
+function computeAttendanceStatus(punches) {
+  const todayStr = new Date().toDateString();
+  const todayPunches = punches
+    .filter(p => new Date(p.createdAt).toDateString() === todayStr)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  const status = {};
+  USERS.forEach(u => { status[u] = { status: 'OUT', lastPunchIn: null, lastPunchOut: null, onBreak: false }; });
+
+  todayPunches.forEach(p => {
+    if (!status[p.user]) return;
+    if (p.label === 'Punch In')    { status[p.user].status = 'IN';     status[p.user].lastPunchIn  = p.time; status[p.user].onBreak = false; }
+    if (p.label === 'Punch Out')   { status[p.user].status = 'OUT';    status[p.user].lastPunchOut = p.time; }
+    if (p.label === 'Start Break') { status[p.user].onBreak = true; }
+    if (p.label === 'End Break')   { status[p.user].onBreak = false; }
+  });
+  return status;
+}
+
+// Today summary per user
+function computeTodaySummary(punches) {
+  const todayStr = new Date().toDateString();
+  const todayPunches = punches
+    .filter(p => new Date(p.createdAt).toDateString() === todayStr)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  const summary = {};
+  USERS.forEach(u => { summary[u] = { punchIn: null, punchOut: null, totalMs: 0, lastIn: null, late: false }; });
+
+  todayPunches.forEach(p => {
+    if (!summary[p.user]) return;
+    if (p.label === 'Punch In') {
+      if (!summary[p.user].punchIn) {
+        summary[p.user].punchIn = p.time;
+        summary[p.user].late    = isLateArrival(p.time);
+      }
+      summary[p.user].lastIn = new Date(p.createdAt);
+    }
+    if (p.label === 'Punch Out') {
+      summary[p.user].punchOut = p.time;
+      if (summary[p.user].lastIn) {
+        summary[p.user].totalMs += new Date(p.createdAt) - summary[p.user].lastIn;
+        summary[p.user].lastIn   = null;
+      }
+    }
+  });
+  return summary;
+}
+
 function computeShiftDurations(punches) {
   return punches.map(punch => {
     if (punch.label !== 'Punch Out') return { ...punch, shiftDuration: null };
@@ -48,7 +117,7 @@ function computeShiftDurations(punches) {
       .filter(p => p.label === 'Punch In' && p.user === punch.user && p.date === punch.date && new Date(p.createdAt) < new Date(punch.createdAt))
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
     if (!matchingIn) return { ...punch, shiftDuration: null };
-    const diffMs = new Date(punch.createdAt) - new Date(matchingIn.createdAt);
+    const diffMs   = new Date(punch.createdAt) - new Date(matchingIn.createdAt);
     const totalSec = Math.floor(diffMs / 1000);
     const hrs  = Math.floor(totalSec / 3600);
     const mins = Math.floor((totalSec % 3600) / 60);
@@ -76,52 +145,53 @@ function computeDailySummary(punches) {
   return Object.values(summary).filter(s => s.totalMs > 0).sort((a, b) => b.date.localeCompare(a.date));
 }
 
-// Dark / Light theme tokens
+// ── Skeleton component
+function Skeleton({ width = '100%', height = '16px', borderRadius = '6px', style = {} }) {
+  return (
+    <div style={{
+      width, height, borderRadius,
+      background: 'linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%)',
+      backgroundSize: '200% 100%',
+      animation: 'shimmer 1.4s infinite',
+      ...style,
+    }} />
+  );
+}
+
 function getTheme(dark) {
   return {
-    app:        { minHeight: '100vh', background: dark ? '#0f172a' : '#f8fafc', padding: '24px', fontFamily: "'Segoe UI', sans-serif", transition: 'background 0.3s' },
-    container:  { maxWidth: '1000px', margin: '0 auto' },
-    header:     { background: dark ? '#1e293b' : '#1e293b', borderRadius: '16px', padding: '24px 28px', marginBottom: '20px', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' },
-    card:       { background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: '16px', padding: '24px', marginBottom: '20px', transition: 'background 0.3s' },
-    statBox:    { flex: '1', minWidth: '130px', background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: '12px', padding: '16px', textAlign: 'center' },
-    statNum:    { fontSize: '1.8rem', fontWeight: '700', color: dark ? '#f1f5f9' : '#1e293b' },
-    statLabel:  { fontSize: '0.78rem', color: dark ? '#64748b' : '#94a3b8', marginTop: '4px' },
-    sectionTitle: { fontSize: '0.78rem', fontWeight: '700', color: dark ? '#64748b' : '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '16px' },
-    select:     { width: '100%', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, fontSize: '1rem', color: dark ? '#f1f5f9' : '#1e293b', background: dark ? '#0f172a' : '#f8fafc', marginBottom: '16px', outline: 'none' },
-    input:      { flex: '1', minWidth: '140px', padding: '11px 14px', borderRadius: '10px', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, fontSize: '0.95rem', color: dark ? '#f1f5f9' : '#1e293b', background: dark ? '#0f172a' : '#f8fafc', outline: 'none' },
-    th:         { padding: '10px 12px', textAlign: 'left', color: dark ? '#64748b' : '#64748b', fontSize: '0.78rem', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `2px solid ${dark ? '#334155' : '#f1f5f9'}` },
-    td:         { padding: '12px', color: dark ? '#e2e8f0' : '#1e293b', fontSize: '0.9rem', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, verticalAlign: 'middle' },
-    trEven:     { background: dark ? '#1e293b' : '#fff' },
-    trOdd:      { background: dark ? '#162032' : '#f8fafc' },
+    app:          { minHeight: '100vh', background: dark ? '#0f172a' : '#f8fafc', padding: '24px', fontFamily: "'Segoe UI', sans-serif", transition: 'background 0.3s' },
+    container:    { maxWidth: '1040px', margin: '0 auto' },
+    header:       { background: '#1e293b', borderRadius: '16px', padding: '24px 28px', marginBottom: '20px', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' },
+    card:         { background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: '16px', padding: '24px', marginBottom: '20px' },
+    statBox:      { flex: '1', minWidth: '130px', background: dark ? '#1e293b' : '#fff', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, borderRadius: '12px', padding: '16px', textAlign: 'center' },
+    statNum:      { fontSize: '1.8rem', fontWeight: '700', color: dark ? '#f1f5f9' : '#1e293b' },
+    statLabel:    { fontSize: '0.78rem', color: dark ? '#64748b' : '#94a3b8', marginTop: '4px' },
+    sectionTitle: { fontSize: '0.78rem', fontWeight: '700', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '16px' },
+    select:       { width: '100%', padding: '12px 14px', borderRadius: '10px', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, fontSize: '1rem', color: dark ? '#f1f5f9' : '#1e293b', background: dark ? '#0f172a' : '#f8fafc', marginBottom: '16px', outline: 'none' },
+    input:        { flex: '1', minWidth: '140px', padding: '11px 14px', borderRadius: '10px', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, fontSize: '0.95rem', color: dark ? '#f1f5f9' : '#1e293b', background: dark ? '#0f172a' : '#f8fafc', outline: 'none' },
+    th:           { padding: '10px 12px', textAlign: 'left', color: '#64748b', fontSize: '0.78rem', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: `2px solid ${dark ? '#334155' : '#f1f5f9'}` },
+    td:           { padding: '12px', color: dark ? '#e2e8f0' : '#1e293b', fontSize: '0.9rem', borderBottom: `1px solid ${dark ? '#1e293b' : '#f1f5f9'}`, verticalAlign: 'middle' },
+    trEven:       { background: dark ? '#1e293b' : '#fff' },
+    trOdd:        { background: dark ? '#162032' : '#f8fafc' },
     filterSelect: { padding: '8px 12px', borderRadius: '8px', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`, fontSize: '0.88rem', color: dark ? '#f1f5f9' : '#1e293b', background: dark ? '#0f172a' : '#f8fafc', outline: 'none' },
-    checkRow:   { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', color: dark ? '#94a3b8' : '#64748b', fontSize: '0.875rem', cursor: 'pointer' },
-    successMsg: { background: '#dcfce7', border: '1px solid #86efac', color: '#166534', borderRadius: '10px', padding: '12px 16px', marginTop: '12px', fontSize: '0.9rem', fontWeight: '600' },
-    errorMsg:   { background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '10px', padding: '12px 16px', marginTop: '12px', fontSize: '0.9rem' },
+    checkRow:     { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', color: dark ? '#94a3b8' : '#64748b', fontSize: '0.875rem', cursor: 'pointer' },
+    successMsg:   { background: '#dcfce7', border: '1px solid #86efac', color: '#166534', borderRadius: '10px', padding: '12px 16px', marginTop: '12px', fontSize: '0.9rem', fontWeight: '600' },
+    errorMsg:     { background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '10px', padding: '12px 16px', marginTop: '12px', fontSize: '0.9rem' },
     tabBtn: (active) => ({
       padding: '8px 20px', borderRadius: '8px', border: 'none', fontWeight: '700', fontSize: '0.88rem', cursor: 'pointer',
       background: active ? '#3b82f6' : (dark ? '#334155' : '#f1f5f9'),
-      color:      active ? '#fff'     : (dark ? '#94a3b8' : '#64748b'),
+      color:      active ? '#fff'    : (dark ? '#94a3b8' : '#64748b'),
     }),
     darkToggle: {
       padding: '8px 14px', borderRadius: '10px', border: `1px solid ${dark ? '#475569' : '#e2e8f0'}`,
       background: dark ? '#334155' : '#fff', color: dark ? '#f1f5f9' : '#1e293b',
       cursor: 'pointer', fontWeight: '600', fontSize: '0.88rem',
     },
-    reportCard: {
-      background: dark ? '#162032' : '#f0f9ff',
-      border: `1px solid ${dark ? '#334155' : '#bae6fd'}`,
-      borderRadius: '14px', padding: '20px', marginBottom: '16px',
-    },
     reportSelect: {
-      padding: '10px 14px', borderRadius: '10px',
-      border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`,
+      padding: '10px 14px', borderRadius: '10px', border: `1px solid ${dark ? '#334155' : '#e2e8f0'}`,
       fontSize: '0.95rem', color: dark ? '#f1f5f9' : '#1e293b',
       background: dark ? '#0f172a' : '#fff', outline: 'none',
-    },
-    downloadBtn: {
-      padding: '12px 24px', background: '#3b82f6', color: '#fff',
-      border: 'none', borderRadius: '10px', fontWeight: '700',
-      fontSize: '0.95rem', cursor: 'pointer',
     },
   };
 }
@@ -139,16 +209,14 @@ export default function App() {
   const [filterUser, setFilterUser]     = useState('All');
   const [filterType, setFilterType]     = useState('All');
   const [breakStart, setBreakStart]     = useState(null);
-  const [activeTab, setActiveTab]       = useState('history');
+  const [activeTab, setActiveTab]       = useState('dashboard');
   const [darkMode, setDarkMode]         = useState(false);
-
-  // Report state
   const now = new Date();
-  const [reportMonth, setReportMonth] = useState(MONTHS[now.getMonth()]);
-  const [reportYear, setReportYear]   = useState(String(now.getFullYear()));
-  const [reportUser, setReportUser]   = useState('All');
-  const [downloading, setDownloading] = useState(false);
-  const [reportMsg, setReportMsg]     = useState(null);
+  const [reportMonth, setReportMonth]   = useState(MONTHS[now.getMonth()]);
+  const [reportYear, setReportYear]     = useState(String(now.getFullYear()));
+  const [reportUser, setReportUser]     = useState('All');
+  const [downloading, setDownloading]   = useState(false);
+  const [reportMsg, setReportMsg]       = useState(null);
 
   // Camera
   const [showCamera, setShowCamera]       = useState(false);
@@ -235,16 +303,11 @@ export default function App() {
   }
 
   function retakePhoto() { setCapturedImage(null); getCameraStream(); }
-
-  function cancelCamera() {
-    setShowCamera(false); stopCamera();
-    setPendingAction(null); setCapturedImage(null);
-  }
+  function cancelCamera() { setShowCamera(false); stopCamera(); setPendingAction(null); setCapturedImage(null); }
 
   function handleActionClick(actionType) {
-    if (actionType === 'Punch In' || actionType === 'Punch Out') {
-      setPendingAction(actionType); setShowCamera(true);
-    } else { submitAction(actionType, null); }
+    if (actionType === 'Punch In' || actionType === 'Punch Out') { setPendingAction(actionType); setShowCamera(true); }
+    else submitAction(actionType, null);
   }
 
   async function confirmAndSubmit() {
@@ -261,18 +324,15 @@ export default function App() {
       if (useManual) {
         if (!manualTime || !manualDate) { setMessage({ type: 'error', text: 'Please enter both date and time.' }); setLoading(false); return; }
         timeVal = manualTime; dateVal = manualDate;
-      } else { const t = getLocalTime(); timeVal = t.time; dateVal = t.date; }
+      } else { const tt = getLocalTime(); timeVal = tt.time; dateVal = tt.date; }
 
       const hour = getLocalTime().hour;
       let greetingMsg = '';
       if (actionType === 'Punch In')    greetingMsg = `${getGreeting(hour, 'punchIn')}, ${selectedUser}!`;
       if (actionType === 'Punch Out')   greetingMsg = `${getGreeting(hour, 'punchOut')}, ${selectedUser}! See you tomorrow.`;
       if (actionType === 'Start Break') { setBreakStart(Date.now()); greetingMsg = `Break started for ${selectedUser}.`; }
-      if (actionType === 'End Break') {
-        const dur = breakStart ? formatDuration(Date.now() - breakStart) : '-';
-        greetingMsg = `Break ended for ${selectedUser}. Duration: ${dur}`;
-        setBreakStart(null);
-      }
+      if (actionType === 'End Break')   { const dur = breakStart ? formatDuration(Date.now() - breakStart) : '-'; greetingMsg = `Break ended. Duration: ${dur}`; setBreakStart(null); }
+
       const breakDuration = (actionType === 'End Break' && breakStart) ? formatDuration(Date.now() - breakStart) : null;
 
       await axios.post('/api/punch', {
@@ -286,38 +346,26 @@ export default function App() {
       setMessage({ type: 'success', text: `✅ ${greetingMsg}${imageBase64 ? ' 📸 Photo saved!' : ''}` });
       setManualTime(''); setManualDate('');
       fetchPunches();
-    } catch {
-      setMessage({ type: 'error', text: 'Failed to save. Please try again.' });
-    } finally { setLoading(false); }
+    } catch { setMessage({ type: 'error', text: 'Failed to save. Please try again.' }); }
+    finally { setLoading(false); }
   }
 
   async function downloadMonthlyReport() {
     setDownloading(true); setReportMsg(null);
     try {
-      const params = new URLSearchParams({ month: reportMonth, year: reportYear, user: reportUser });
+      const params   = new URLSearchParams({ month: reportMonth, year: reportYear, user: reportUser });
       const response = await fetch(`/api/report/monthly?${params}`);
-
-      if (!response.ok) {
-        const err = await response.json();
-        setReportMsg({ type: 'error', text: err.error || 'No records found for this period.' });
-        return;
-      }
-
-      // Trigger CSV download
-      const blob     = await response.blob();
-      const url      = window.URL.createObjectURL(blob);
-      const a        = document.createElement('a');
-      a.href         = url;
-      a.download     = `attendance-${reportMonth}-${reportYear}${reportUser !== 'All' ? '-' + reportUser.replace(' ', '_') : ''}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      if (!response.ok) { const err = await response.json(); setReportMsg({ type: 'error', text: err.error || 'No records found.' }); return; }
+      const blob = await response.blob();
+      const url  = window.URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `attendance-${reportMonth}-${reportYear}${reportUser !== 'All' ? '-' + reportUser.replace(' ', '_') : ''}.csv`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
-
       setReportMsg({ type: 'success', text: `✅ Downloaded attendance-${reportMonth}-${reportYear}.csv` });
-    } catch {
-      setReportMsg({ type: 'error', text: 'Download failed. Please try again.' });
-    } finally { setDownloading(false); }
+    } catch { setReportMsg({ type: 'error', text: 'Download failed. Please try again.' }); }
+    finally { setDownloading(false); }
   }
 
   async function handleDelete(id) {
@@ -330,6 +378,10 @@ export default function App() {
   const todayStr    = new Date().toDateString();
   const todayCount  = punches.filter(p => new Date(p.createdAt).toDateString() === todayStr).length;
   const totalBreaks = punches.filter(p => p.label === 'End Break' && p.breakDuration && p.breakDuration !== '-').length;
+  const attendanceStatus = computeAttendanceStatus(punches);
+  const todaySummary     = computeTodaySummary(punches);
+  const inCount  = Object.values(attendanceStatus).filter(s => s.status === 'IN').length;
+  const outCount = Object.values(attendanceStatus).filter(s => s.status === 'OUT').length;
   const punchesWithDuration = computeShiftDurations(punches);
   const filtered = punchesWithDuration.filter(p => {
     const userMatch = filterUser === 'All' || (p.user && p.user === filterUser);
@@ -353,18 +405,26 @@ export default function App() {
 
   return (
     <div style={t.app}>
+      {/* Shimmer keyframes */}
+      <style>{`
+        @keyframes shimmer {
+          0%   { background-position: -200% 0; }
+          100% { background-position:  200% 0; }
+        }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.4; }
+        }
+      `}</style>
 
       {/* ── CAMERA MODAL ── */}
       {showCamera && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.88)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div style={{ background: '#1e293b', borderRadius: '20px', padding: '24px', width: '100%', maxWidth: '500px' }}>
             <div style={{ textAlign: 'center', marginBottom: '16px' }}>
-              <div style={{ color: '#fff', fontSize: '1.15rem', fontWeight: '700' }}>
-                {pendingAction === 'Punch In' ? '👊 Punch In' : '🚪 Punch Out'} — Take a Selfie
-              </div>
+              <div style={{ color: '#fff', fontSize: '1.15rem', fontWeight: '700' }}>{pendingAction === 'Punch In' ? '👊 Punch In' : '🚪 Punch Out'} — Take a Selfie</div>
               <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '4px' }}>{selectedUser}</div>
             </div>
-
             {cameraError && (
               <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#f87171', borderRadius: '12px', padding: '14px', marginBottom: '14px', textAlign: 'center', fontSize: '0.85rem' }}>
                 <div style={{ fontSize: '1.8rem', marginBottom: '6px' }}>📷</div>
@@ -372,7 +432,6 @@ export default function App() {
                 <div>{cameraError}</div>
               </div>
             )}
-
             {!capturedImage && (
               <div style={{ borderRadius: '14px', overflow: 'hidden', marginBottom: '14px', background: '#0f172a', minHeight: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                 {cameraActive ? (
@@ -384,19 +443,15 @@ export default function App() {
                       </div>
                     )}
                   </>
-                ) : (
-                  !cameraError && <div style={{ color: '#475569', fontSize: '0.9rem', padding: '40px' }}>⏳ Starting camera...</div>
-                )}
+                ) : (!cameraError && <div style={{ color: '#475569', fontSize: '0.9rem', padding: '40px' }}>⏳ Starting camera...</div>)}
               </div>
             )}
-
             {capturedImage && (
               <div style={{ borderRadius: '14px', overflow: 'hidden', marginBottom: '14px', position: 'relative' }}>
                 <img src={capturedImage} alt="selfie" style={{ width: '100%', display: 'block', borderRadius: '14px', transform: 'scaleX(-1)' }} />
                 <div style={{ position: 'absolute', top: '10px', right: '10px', background: '#dcfce7', color: '#166534', borderRadius: '20px', padding: '4px 14px', fontSize: '0.78rem', fontWeight: '700' }}>✅ Photo Ready</div>
               </div>
             )}
-
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {cameraActive && !capturedImage && countdown === null && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
@@ -423,19 +478,30 @@ export default function App() {
         <div style={t.header}>
           <div>
             <div style={{ fontSize: '1.6rem', fontWeight: '700', marginBottom: '4px' }}>{greeting}, {selectedUser}! 👋</div>
-            <div style={{ fontSize: '0.9rem', color: '#94a3b8' }}>{currentTime.time} · {currentTime.date} · {currentTime.timezone}</div>
+            <div style={{ fontSize: '0.9rem', color: '#94a3b8' }}>{currentTime.time} · {currentTime.date}</div>
           </div>
           <button style={t.darkToggle} onClick={() => setDarkMode(!darkMode)}>
-            {darkMode ? '☀️ Light Mode' : '🌙 Dark Mode'}
+            {darkMode ? '☀️ Light' : '🌙 Dark'}
           </button>
         </div>
 
         {/* Stats */}
         <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
-          <div style={t.statBox}><div style={t.statNum}>{punches.length}</div><div style={t.statLabel}>Total Records</div></div>
-          <div style={t.statBox}><div style={{ ...t.statNum, color: '#166534' }}>{todayCount}</div><div style={t.statLabel}>Today's Punches</div></div>
-          <div style={t.statBox}><div style={{ ...t.statNum, color: '#854d0e' }}>{totalBreaks}</div><div style={t.statLabel}>Breaks Taken</div></div>
-          <div style={t.statBox}><div style={{ ...t.statNum, color: '#3b82f6' }}>{USERS.length}</div><div style={t.statLabel}>Total Users</div></div>
+          {fetchLoading ? (
+            [1,2,3,4].map(i => (
+              <div key={i} style={{ ...t.statBox }}>
+                <Skeleton height="2rem" width="60%" style={{ margin: '0 auto 8px' }} />
+                <Skeleton height="0.75rem" width="80%" style={{ margin: '0 auto' }} />
+              </div>
+            ))
+          ) : (
+            <>
+              <div style={t.statBox}><div style={t.statNum}>{punches.length}</div><div style={t.statLabel}>Total Records</div></div>
+              <div style={t.statBox}><div style={{ ...t.statNum, color: '#166534' }}>{todayCount}</div><div style={t.statLabel}>Today's Punches</div></div>
+              <div style={t.statBox}><div style={{ ...t.statNum, color: '#3b82f6' }}>{inCount}</div><div style={t.statLabel}>Currently IN</div></div>
+              <div style={t.statBox}><div style={{ ...t.statNum, color: '#94a3b8' }}>{outCount}</div><div style={t.statLabel}>Currently OUT</div></div>
+            </>
+          )}
         </div>
 
         {/* Punch Card */}
@@ -446,7 +512,7 @@ export default function App() {
           </select>
           <label style={t.checkRow}>
             <input type="checkbox" checked={useManual} onChange={e => setUseManual(e.target.checked)} />
-            Enter time manually (if auto-detect fails)
+            Enter time manually
           </label>
           {useManual && (
             <div style={{ display: 'flex', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' }}>
@@ -467,12 +533,121 @@ export default function App() {
 
         {/* Tabs */}
         <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
-          <button style={t.tabBtn(activeTab === 'history')}  onClick={() => setActiveTab('history')}>📋 Shift History</button>
-          <button style={t.tabBtn(activeTab === 'summary')}  onClick={() => setActiveTab('summary')}>📊 Daily Summary</button>
-          <button style={t.tabBtn(activeTab === 'report')}   onClick={() => setActiveTab('report')}>📥 Monthly Report</button>
+          <button style={t.tabBtn(activeTab === 'dashboard')} onClick={() => setActiveTab('dashboard')}>🏠 Dashboard</button>
+          <button style={t.tabBtn(activeTab === 'history')}   onClick={() => setActiveTab('history')}>📋 Shift History</button>
+          <button style={t.tabBtn(activeTab === 'summary')}   onClick={() => setActiveTab('summary')}>📊 Daily Summary</button>
+          <button style={t.tabBtn(activeTab === 'report')}    onClick={() => setActiveTab('report')}>📥 Monthly Report</button>
         </div>
 
-        {/* ── SHIFT HISTORY ── */}
+        {/* ── DASHBOARD TAB ── */}
+        {activeTab === 'dashboard' && (
+          <>
+            {/* Live Attendance Status */}
+            <div style={t.card}>
+              <div style={t.sectionTitle}>🟢 Live Attendance Status</div>
+              {fetchLoading ? (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px' }}>
+                  {USERS.map(u => (
+                    <div key={u} style={{ background: darkMode ? '#162032' : '#f8fafc', borderRadius: '12px', padding: '14px' }}>
+                      <Skeleton height="14px" width="70%" style={{ marginBottom: '8px' }} />
+                      <Skeleton height="22px" width="50%" style={{ marginBottom: '6px' }} />
+                      <Skeleton height="12px" width="80%" />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px' }}>
+                  {USERS.map(user => {
+                    const s = attendanceStatus[user] || { status: 'OUT' };
+                    const isIN     = s.status === 'IN';
+                    const onBreak  = s.onBreak;
+                    const bgColor  = onBreak ? (darkMode ? '#1c1a0a' : '#fefce8') : isIN ? (darkMode ? '#0a1f0a' : '#f0fdf4') : (darkMode ? '#1f0a0a' : '#fef2f2');
+                    const dotColor = onBreak ? '#f59e0b' : isIN ? '#22c55e' : '#ef4444';
+                    const label    = onBreak ? 'ON BREAK' : isIN ? 'IN' : 'OUT';
+                    const labelClr = onBreak ? '#854d0e' : isIN ? '#166534' : '#991b1b';
+                    return (
+                      <div key={user} style={{ background: bgColor, borderRadius: '12px', padding: '14px', border: `1px solid ${dotColor}30` }}>
+                        <div style={{ fontSize: '0.82rem', fontWeight: '600', color: darkMode ? '#94a3b8' : '#475569', marginBottom: '6px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: dotColor, animation: isIN && !onBreak ? 'pulse 2s infinite' : 'none' }} />
+                          <span style={{ fontSize: '0.88rem', fontWeight: '800', color: labelClr }}>{label}</span>
+                        </div>
+                        {isIN && s.lastPunchIn && (
+                          <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Since {s.lastPunchIn}</div>
+                        )}
+                        {!isIN && s.lastPunchOut && (
+                          <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Left {s.lastPunchOut}</div>
+                        )}
+                        {!isIN && !s.lastPunchOut && (
+                          <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Not yet in</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Today's Summary Card */}
+            <div style={t.card}>
+              <div style={t.sectionTitle}>📅 Today's Summary</div>
+              {fetchLoading ? (
+                <div>
+                  {[1,2,3].map(i => (
+                    <div key={i} style={{ display: 'flex', gap: '12px', padding: '12px 0', borderBottom: `1px solid ${darkMode ? '#1e293b' : '#f1f5f9'}` }}>
+                      <Skeleton height="14px" width="120px" />
+                      <Skeleton height="14px" width="80px" />
+                      <Skeleton height="14px" width="80px" />
+                      <Skeleton height="14px" width="80px" />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr>
+                        {['User', 'Punch In', 'Punch Out', 'Hours Worked', 'Status'].map(h => <th key={h} style={t.th}>{h}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {USERS.map((user, idx) => {
+                        const s   = todaySummary[user] || {};
+                        const att = attendanceStatus[user] || { status: 'OUT' };
+                        return (
+                          <tr key={user} style={idx % 2 === 0 ? t.trEven : t.trOdd}>
+                            <td style={{ ...t.td, fontWeight: '700' }}>
+                              {user}
+                              {s.late && (
+                                <span style={{ marginLeft: '6px', background: '#fee2e2', color: '#991b1b', borderRadius: '10px', padding: '2px 8px', fontSize: '0.7rem', fontWeight: '700' }}>
+                                  ⚠️ LATE
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ ...t.td, color: s.late ? '#ef4444' : '#166534', fontWeight: '600' }}>{s.punchIn || '-'}</td>
+                            <td style={{ ...t.td, color: '#94a3b8' }}>{s.punchOut || '-'}</td>
+                            <td style={t.td}>
+                              {s.totalMs > 0
+                                ? <span style={{ background: '#dbeafe', color: '#1e40af', borderRadius: '20px', padding: '3px 10px', fontSize: '0.82rem', fontWeight: '700' }}>🕐 {formatDuration(s.totalMs)}</span>
+                                : <span style={{ color: '#94a3b8' }}>-</span>}
+                            </td>
+                            <td style={t.td}>
+                              <span style={{ background: att.status === 'IN' ? '#dcfce7' : '#fee2e2', color: att.status === 'IN' ? '#166534' : '#991b1b', borderRadius: '20px', padding: '3px 10px', fontSize: '0.78rem', fontWeight: '700' }}>
+                                {att.onBreak ? '☕ Break' : att.status === 'IN' ? '🟢 IN' : '🔴 OUT'}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ── SHIFT HISTORY TAB ── */}
         {activeTab === 'history' && (
           <div style={t.card}>
             <div style={t.sectionTitle}>Shift History</div>
@@ -488,39 +663,52 @@ export default function App() {
               </select>
             </div>
             {fetchLoading ? (
-              <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Loading records...</div>
+              <div>
+                {[1,2,3,4,5].map(i => (
+                  <div key={i} style={{ display: 'flex', gap: '16px', padding: '14px 12px', borderBottom: `1px solid ${darkMode ? '#1e293b' : '#f1f5f9'}`, alignItems: 'center' }}>
+                    <Skeleton height="14px" width="20px" />
+                    <Skeleton height="14px" width="100px" />
+                    <Skeleton height="22px" width="70px" borderRadius="20px" />
+                    <Skeleton height="14px" width="80px" />
+                    <Skeleton height="14px" width="120px" />
+                    <Skeleton height="22px" width="80px" borderRadius="20px" />
+                  </div>
+                ))}
+              </div>
             ) : filtered.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>No records found.</div>
             ) : (
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
-                    <tr>
-                      {['#','User','Type','Time','Date','Shift Duration','Break','Action'].map(h => (
-                        <th key={h} style={t.th}>{h}</th>
-                      ))}
-                    </tr>
+                    <tr>{['#','User','Type','Time','Date','Shift Duration','Break','Action'].map(h => <th key={h} style={t.th}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
-                    {filtered.map((punch, idx) => (
-                      <tr key={punch.id} style={idx % 2 === 0 ? t.trEven : t.trOdd}>
-                        <td style={{ ...t.td, color: '#94a3b8', fontSize: '0.82rem' }}>{idx + 1}</td>
-                        <td style={{ ...t.td, fontWeight: '600' }}>{punch.user || '-'}</td>
-                        <td style={t.td}><span style={badge(punch.label)}>{punch.label || 'Punch In'}</span></td>
-                        <td style={{ ...t.td, fontWeight: '600', color: '#3b82f6' }}>{punch.time}</td>
-                        <td style={{ ...t.td, fontSize: '0.82rem', color: '#64748b' }}>{punch.date}</td>
-                        <td style={t.td}>
-                          {punch.shiftDuration
-                            ? <span style={{ background: '#dcfce7', color: '#166534', borderRadius: '20px', padding: '3px 12px', fontSize: '0.82rem', fontWeight: '700' }}>⏱ {punch.shiftDuration}</span>
-                            : <span style={{ color: '#94a3b8' }}>-</span>}
-                        </td>
-                        <td style={{ ...t.td, color: '#854d0e' }}>{punch.breakDuration || '-'}</td>
-                        <td style={t.td}>
-                          <button style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '8px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
-                            onClick={() => handleDelete(punch.id)}>Delete</button>
-                        </td>
-                      </tr>
-                    ))}
+                    {filtered.map((punch, idx) => {
+                      const late = punch.label === 'Punch In' && isLateArrival(punch.time);
+                      return (
+                        <tr key={punch.id} style={{ background: late ? (darkMode ? '#1f0a0a' : '#fff5f5') : idx % 2 === 0 ? t.trEven.background : t.trOdd.background }}>
+                          <td style={{ ...t.td, color: '#94a3b8', fontSize: '0.82rem' }}>{idx + 1}</td>
+                          <td style={{ ...t.td, fontWeight: '600' }}>
+                            {punch.user || '-'}
+                            {late && <span style={{ marginLeft: '6px', background: '#fee2e2', color: '#991b1b', borderRadius: '10px', padding: '2px 6px', fontSize: '0.68rem', fontWeight: '700' }}>⚠️ LATE</span>}
+                          </td>
+                          <td style={t.td}><span style={badge(punch.label)}>{punch.label}</span></td>
+                          <td style={{ ...t.td, fontWeight: '600', color: late ? '#ef4444' : '#3b82f6' }}>{punch.time}</td>
+                          <td style={{ ...t.td, fontSize: '0.82rem', color: '#64748b' }}>{punch.date}</td>
+                          <td style={t.td}>
+                            {punch.shiftDuration
+                              ? <span style={{ background: '#dcfce7', color: '#166534', borderRadius: '20px', padding: '3px 12px', fontSize: '0.82rem', fontWeight: '700' }}>⏱ {punch.shiftDuration}</span>
+                              : <span style={{ color: '#94a3b8' }}>-</span>}
+                          </td>
+                          <td style={{ ...t.td, color: '#854d0e' }}>{punch.breakDuration || '-'}</td>
+                          <td style={t.td}>
+                            <button style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: '8px', padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: '600' }}
+                              onClick={() => handleDelete(punch.id)}>Delete</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -528,18 +716,25 @@ export default function App() {
           </div>
         )}
 
-        {/* ── DAILY SUMMARY ── */}
+        {/* ── DAILY SUMMARY TAB ── */}
         {activeTab === 'summary' && (
           <div style={t.card}>
             <div style={t.sectionTitle}>Daily Hours Summary</div>
-            {summaryRows.length === 0 ? (
+            {fetchLoading ? (
+              <div>{[1,2,3].map(i => (
+                <div key={i} style={{ display: 'flex', gap: '16px', padding: '14px 12px', borderBottom: `1px solid ${darkMode ? '#1e293b' : '#f1f5f9'}` }}>
+                  <Skeleton height="14px" width="20px" />
+                  <Skeleton height="14px" width="100px" />
+                  <Skeleton height="14px" width="140px" />
+                  <Skeleton height="22px" width="80px" borderRadius="20px" />
+                </div>
+              ))}</div>
+            ) : summaryRows.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>No completed shifts yet.</div>
             ) : (
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr>{['#','User','Date','Total Hours Worked'].map(h => <th key={h} style={t.th}>{h}</th>)}</tr>
-                  </thead>
+                  <thead><tr>{['#','User','Date','Total Hours'].map(h => <th key={h} style={t.th}>{h}</th>)}</tr></thead>
                   <tbody>
                     {summaryRows.map((row, idx) => (
                       <tr key={`${row.user}__${row.date}`} style={idx % 2 === 0 ? t.trEven : t.trOdd}>
@@ -560,13 +755,13 @@ export default function App() {
           </div>
         )}
 
-        {/* ── MONTHLY REPORT ── */}
+        {/* ── MONTHLY REPORT TAB ── */}
         {activeTab === 'report' && (
           <div style={t.card}>
             <div style={t.sectionTitle}>Monthly Report Download</div>
-            <div style={t.reportCard}>
+            <div style={{ background: darkMode ? '#162032' : '#f0f9ff', border: `1px solid ${darkMode ? '#334155' : '#bae6fd'}`, borderRadius: '14px', padding: '20px', marginBottom: '16px' }}>
               <div style={{ fontSize: '0.9rem', color: darkMode ? '#94a3b8' : '#0369a1', marginBottom: '16px', fontWeight: '600' }}>
-                📥 Download attendance records as CSV file — opens directly in Excel
+                📥 Download attendance records as CSV — opens directly in Excel
               </div>
               <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -589,25 +784,16 @@ export default function App() {
                   </select>
                 </div>
               </div>
-
               <button
-                style={{ ...t.downloadBtn, ...(downloading ? btnDisabled : {}) }}
-                onClick={downloadMonthlyReport}
-                disabled={downloading}
-              >
+                style={{ padding: '12px 24px', background: downloading ? '#94a3b8' : '#3b82f6', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: '700', fontSize: '0.95rem', cursor: downloading ? 'not-allowed' : 'pointer' }}
+                onClick={downloadMonthlyReport} disabled={downloading}>
                 {downloading ? '⏳ Generating...' : `📥 Download ${reportMonth} ${reportYear} Report`}
               </button>
-
               {reportMsg && (
                 <div style={{ ...(reportMsg.type === 'success' ? { background: '#dcfce7', color: '#166534', border: '1px solid #86efac' } : { background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5' }), borderRadius: '10px', padding: '10px 14px', marginTop: '14px', fontSize: '0.88rem', fontWeight: '600' }}>
                   {reportMsg.text}
                 </div>
               )}
-            </div>
-
-            <div style={{ fontSize: '0.85rem', color: '#64748b', lineHeight: '1.6' }}>
-              <div style={{ fontWeight: '700', marginBottom: '6px', color: darkMode ? '#94a3b8' : '#475569' }}>CSV file contains:</div>
-              <div>PunchId · User · Type · Time · Date · Timezone · Source · Break Duration · Image URL · Timestamp</div>
             </div>
           </div>
         )}
