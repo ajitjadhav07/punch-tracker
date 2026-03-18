@@ -72,13 +72,15 @@ function isLateArrival(timeStr) {
 }
 
 function computeAttendanceStatus(punches) {
-  const todayStr    = new Date().toDateString();
+  const todayStr     = new Date().toDateString();
   const todayPunches = punches
     .filter(p => new Date(p.createdAt).toDateString() === todayStr)
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
   const status = {};
-  USERS.forEach(u => { status[u] = { status: 'OUT', lastPunchIn: null, lastPunchInTime: null, lastPunchOut: null, onBreak: false, totalMs: 0, lastInCreatedAt: null }; });
+  USERS.forEach(u => {
+    status[u] = { status: 'OUT', lastPunchIn: null, lastPunchOut: null, onBreak: false, totalMs: 0, lastInCreatedAt: null };
+  });
 
   todayPunches.forEach(p => {
     if (!status[p.user]) return;
@@ -103,23 +105,31 @@ function computeAttendanceStatus(punches) {
 }
 
 function computeTodaySummary(punches) {
-  const todayStr    = new Date().toDateString();
+  const todayStr     = new Date().toDateString();
   const todayPunches = punches
     .filter(p => new Date(p.createdAt).toDateString() === todayStr)
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
   const summary = {};
-  USERS.forEach(u => { summary[u] = { punchIn: null, punchOut: null, totalMs: 0, lastIn: null, late: false }; });
+  USERS.forEach(u => {
+    summary[u] = { punchIn: null, punchOut: null, totalMs: 0, lastIn: null, late: false };
+  });
 
   todayPunches.forEach(p => {
     if (!summary[p.user]) return;
     if (p.label === 'Punch In') {
-      if (!summary[p.user].punchIn) { summary[p.user].punchIn = p.time; summary[p.user].late = isLateArrival(p.time); }
+      if (!summary[p.user].punchIn) {
+        summary[p.user].punchIn = p.time;
+        summary[p.user].late    = isLateArrival(p.time);
+      }
       summary[p.user].lastIn = new Date(p.createdAt);
     }
     if (p.label === 'Punch Out') {
       summary[p.user].punchOut = p.time;
-      if (summary[p.user].lastIn) { summary[p.user].totalMs += new Date(p.createdAt) - summary[p.user].lastIn; summary[p.user].lastIn = null; }
+      if (summary[p.user].lastIn) {
+        summary[p.user].totalMs += new Date(p.createdAt) - summary[p.user].lastIn;
+        summary[p.user].lastIn   = null;
+      }
     }
   });
   return summary;
@@ -132,7 +142,7 @@ function computeShiftDurations(punches) {
       .filter(p => p.label === 'Punch In' && p.user === punch.user && p.date === punch.date && new Date(p.createdAt) < new Date(punch.createdAt))
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
     if (!matchingIn) return { ...punch, shiftDuration: null };
-    const diffMs = new Date(punch.createdAt) - new Date(matchingIn.createdAt);
+    const diffMs   = new Date(punch.createdAt) - new Date(matchingIn.createdAt);
     const totalSec = Math.floor(diffMs / 1000);
     const hrs  = Math.floor(totalSec / 3600);
     const mins = Math.floor((totalSec % 3600) / 60);
@@ -153,7 +163,7 @@ function computeDailySummary(punches) {
     if (!summary[key]) summary[key] = { user: punch.user, date: punch.date, totalMs: 0, lastPunchIn: null };
     if (punch.label === 'Punch In')  summary[key].lastPunchIn = new Date(punch.createdAt);
     if (punch.label === 'Punch Out' && summary[key].lastPunchIn) {
-      summary[key].totalMs += new Date(punch.createdAt) - summary[key].lastPunchIn;
+      summary[key].totalMs    += new Date(punch.createdAt) - summary[key].lastPunchIn;
       summary[key].lastPunchIn = null;
     }
   });
@@ -222,17 +232,20 @@ export default function App() {
   const [message, setMessage]           = useState(null);
   const [filterUser, setFilterUser]     = useState('All');
   const [filterType, setFilterType]     = useState('All');
-  const [breakStart, setBreakStart]     = useState(null);
+
+  // ✅ Per-user break tracking
+  const [breakStarts, setBreakStarts]   = useState({});
+
   const [activeTab, setActiveTab]       = useState('dashboard');
   const [darkMode, setDarkMode]         = useState(false);
   const [liveTimers, setLiveTimers]     = useState({});
 
   const now = new Date();
-  const [reportMonth, setReportMonth] = useState(MONTHS[now.getMonth()]);
-  const [reportYear, setReportYear]   = useState(String(now.getFullYear()));
-  const [reportUser, setReportUser]   = useState('All');
-  const [downloading, setDownloading] = useState(false);
-  const [reportMsg, setReportMsg]     = useState(null);
+  const [reportMonth, setReportMonth]   = useState(MONTHS[now.getMonth()]);
+  const [reportYear, setReportYear]     = useState(String(now.getFullYear()));
+  const [reportUser, setReportUser]     = useState('All');
+  const [downloading, setDownloading]   = useState(false);
+  const [reportMsg, setReportMsg]       = useState(null);
 
   const [showCamera, setShowCamera]       = useState(false);
   const [cameraActive, setCameraActive]   = useState(false);
@@ -247,16 +260,14 @@ export default function App() {
 
   const t = getTheme(darkMode);
 
-  // Live clock
   useEffect(() => {
     const id = setInterval(() => setCurrentTime(getLocalTime()), 1000);
     return () => clearInterval(id);
   }, []);
 
-  // Fetch records
   useEffect(() => { fetchPunches(); }, []);
 
-  // Live timer — updates every second for IN users
+  // Live timer — updates every second
   useEffect(() => {
     const id = setInterval(() => {
       const status = computeAttendanceStatus(punches);
@@ -265,7 +276,7 @@ export default function App() {
         const s = status[user];
         if (s.status === 'IN' && s.lastInCreatedAt && !s.onBreak) {
           timers[user] = Date.now() - s.lastInCreatedAt.getTime() + (s.totalMs || 0);
-        } else if (s.status === 'OUT') {
+        } else {
           timers[user] = s.totalMs || 0;
         }
       });
@@ -301,7 +312,9 @@ export default function App() {
   async function getCameraStream() {
     setCameraError(null); setCapturedImage(null); setCameraActive(false);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false,
+      });
       streamRef.current = stream;
       setCameraActive(true);
     } catch (err) {
@@ -314,15 +327,19 @@ export default function App() {
   function stopCamera() {
     if (countdownRef.current) clearInterval(countdownRef.current);
     setCountdown(null);
-    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
     setCameraActive(false);
   }
 
   function capturePhoto() {
     if (!videoRef.current) return;
-    const video = videoRef.current;
+    const video  = videoRef.current;
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
     canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
     setCapturedImage(canvas.toDataURL('image/jpeg', 0.85));
     stopCamera();
@@ -337,12 +354,15 @@ export default function App() {
     }, 1000);
   }
 
-  function retakePhoto() { setCapturedImage(null); getCameraStream(); }
+  function retakePhoto()  { setCapturedImage(null); getCameraStream(); }
   function cancelCamera() { setShowCamera(false); stopCamera(); setPendingAction(null); setCapturedImage(null); }
 
   function handleActionClick(actionType) {
-    if (actionType === 'Punch In' || actionType === 'Punch Out') { setPendingAction(actionType); setShowCamera(true); }
-    else submitAction(actionType, null);
+    if (actionType === 'Punch In' || actionType === 'Punch Out') {
+      setPendingAction(actionType); setShowCamera(true);
+    } else {
+      submitAction(actionType, null);
+    }
   }
 
   async function confirmAndSubmit() {
@@ -352,23 +372,50 @@ export default function App() {
     setCapturedImage(null); setPendingAction(null);
   }
 
+  // ✅ Fixed submitAction with per-user break tracking
   async function submitAction(actionType, imageBase64) {
     setLoading(true); setMessage(null);
     try {
       let timeVal, dateVal;
       if (useManual) {
-        if (!manualTime || !manualDate) { setMessage({ type: 'error', text: 'Please enter both date and time.' }); setLoading(false); return; }
+        if (!manualTime || !manualDate) {
+          setMessage({ type: 'error', text: 'Please enter both date and time.' });
+          setLoading(false); return;
+        }
         timeVal = manualTime; dateVal = manualDate;
-      } else { const tt = getLocalTime(); timeVal = tt.time; dateVal = tt.date; }
+      } else {
+        const tt = getLocalTime(); timeVal = tt.time; dateVal = tt.date;
+      }
 
       const hour = getLocalTime().hour;
-      let greetingMsg = '';
-      if (actionType === 'Punch In')    greetingMsg = `${getGreeting(hour, 'punchIn')}, ${selectedUser}!`;
-      if (actionType === 'Punch Out')   greetingMsg = `${getGreeting(hour, 'punchOut')}, ${selectedUser}! See you tomorrow.`;
-      if (actionType === 'Start Break') { setBreakStart(Date.now()); greetingMsg = `Break started for ${selectedUser}.`; }
-      if (actionType === 'End Break')   { const dur = breakStart ? formatDuration(Date.now() - breakStart) : '-'; greetingMsg = `Break ended. Duration: ${dur}`; setBreakStart(null); }
+      let greetingMsg   = '';
+      let breakDuration = null;
 
-      const breakDuration = (actionType === 'End Break' && breakStart) ? formatDuration(Date.now() - breakStart) : null;
+      if (actionType === 'Punch In')
+        greetingMsg = `${getGreeting(hour, 'punchIn')}, ${selectedUser}!`;
+
+      if (actionType === 'Punch Out')
+        greetingMsg = `${getGreeting(hour, 'punchOut')}, ${selectedUser}! See you tomorrow.`;
+
+      if (actionType === 'Start Break') {
+        // ✅ Save break start for THIS user only
+        setBreakStarts(prev => ({ ...prev, [selectedUser]: Date.now() }));
+        greetingMsg = `Break started for ${selectedUser}.`;
+      }
+
+      if (actionType === 'End Break') {
+        // ✅ Get break start for THIS user only
+        const userBreakStart = breakStarts[selectedUser];
+        const dur = userBreakStart ? formatDuration(Date.now() - userBreakStart) : '-';
+        breakDuration = dur;
+        greetingMsg   = `Break ended for ${selectedUser}. Duration: ${dur}`;
+        // ✅ Clear break for THIS user only
+        setBreakStarts(prev => {
+          const updated = { ...prev };
+          delete updated[selectedUser];
+          return updated;
+        });
+      }
 
       await axios.post('/api/punch', {
         time: timeVal, date: dateVal,
@@ -381,8 +428,11 @@ export default function App() {
       setMessage({ type: 'success', text: `✅ ${greetingMsg}${imageBase64 ? ' 📸 Photo saved!' : ''}` });
       setManualTime(''); setManualDate('');
       fetchPunches();
-    } catch { setMessage({ type: 'error', text: 'Failed to save. Please try again.' }); }
-    finally { setLoading(false); }
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to save. Please try again.' });
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function downloadMonthlyReport() {
@@ -399,8 +449,11 @@ export default function App() {
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
       setReportMsg({ type: 'success', text: `✅ Downloaded attendance-${reportMonth}-${reportYear}.csv` });
-    } catch { setReportMsg({ type: 'error', text: 'Download failed. Please try again.' }); }
-    finally { setDownloading(false); }
+    } catch {
+      setReportMsg({ type: 'error', text: 'Download failed. Please try again.' });
+    } finally {
+      setDownloading(false);
+    }
   }
 
   async function handleDelete(id) {
@@ -415,17 +468,8 @@ export default function App() {
   const attendanceStatus = computeAttendanceStatus(punches);
   const todaySummary     = computeTodaySummary(punches);
   const inCount          = Object.values(attendanceStatus).filter(s => s.status === 'IN').length;
-  const outCount         = Object.values(attendanceStatus).filter(s => s.status === 'OUT').length;
-
-  // Absent users — not punched in at all today
-  const absentUsers = USERS.filter(u => !todaySummary[u]?.punchIn);
-
-  // Overtime users — worked more than 8 hours
-  const overtimeUsers = USERS.filter(u => {
-    const ms = liveTimers[u] || 0;
-    return ms > OVERTIME_HOURS * 3600 * 1000;
-  });
-
+  const absentUsers      = USERS.filter(u => !todaySummary[u]?.punchIn);
+  const overtimeUsers    = USERS.filter(u => (liveTimers[u] || 0) > OVERTIME_HOURS * 3600 * 1000);
   const punchesWithDuration = computeShiftDurations(punches);
   const filtered = punchesWithDuration.filter(p => {
     const userMatch = filterUser === 'All' || (p.user && p.user === filterUser);
@@ -436,7 +480,12 @@ export default function App() {
   const years = [String(now.getFullYear() - 1), String(now.getFullYear()), String(now.getFullYear() + 1)];
 
   const badge = (type) => {
-    const map = { 'Punch In': { bg: '#dcfce7', color: '#166534' }, 'Punch Out': { bg: '#fee2e2', color: '#991b1b' }, 'Start Break': { bg: '#fef9c3', color: '#854d0e' }, 'End Break': { bg: '#dbeafe', color: '#1e40af' } };
+    const map = {
+      'Punch In':    { bg: '#dcfce7', color: '#166534' },
+      'Punch Out':   { bg: '#fee2e2', color: '#991b1b' },
+      'Start Break': { bg: '#fef9c3', color: '#854d0e' },
+      'End Break':   { bg: '#dbeafe', color: '#1e40af' },
+    };
     const c = map[type] || { bg: '#f1f5f9', color: '#475569' };
     return { background: c.bg, color: c.color, borderRadius: '20px', padding: '3px 10px', fontSize: '0.78rem', fontWeight: '600', whiteSpace: 'nowrap' };
   };
@@ -450,8 +499,8 @@ export default function App() {
   return (
     <div style={t.app}>
       <style>{`
-        @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
-        @keyframes pulse   { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        @keyframes shimmer    { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        @keyframes pulse      { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
         @keyframes timerPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } }
       `}</style>
 
@@ -460,7 +509,9 @@ export default function App() {
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.88)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div style={{ background: '#1e293b', borderRadius: '20px', padding: '24px', width: '100%', maxWidth: '500px' }}>
             <div style={{ textAlign: 'center', marginBottom: '16px' }}>
-              <div style={{ color: '#fff', fontSize: '1.15rem', fontWeight: '700' }}>{pendingAction === 'Punch In' ? '👊 Punch In' : '🚪 Punch Out'} — Take a Selfie</div>
+              <div style={{ color: '#fff', fontSize: '1.15rem', fontWeight: '700' }}>
+                {pendingAction === 'Punch In' ? '👊 Punch In' : '🚪 Punch Out'} — Take a Selfie
+              </div>
               <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '4px' }}>{selectedUser}</div>
             </div>
             {cameraError && (
@@ -497,7 +548,9 @@ export default function App() {
                   <button style={{ padding: '13px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }} onClick={startCountdown}>⏱ Timer (3s)</button>
                 </div>
               )}
-              {capturedImage && <button style={{ padding: '13px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }} onClick={retakePhoto}>🔄 Retake Photo</button>}
+              {capturedImage && (
+                <button style={{ padding: '13px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', cursor: 'pointer' }} onClick={retakePhoto}>🔄 Retake Photo</button>
+              )}
               {capturedImage && (
                 <button style={{ padding: '14px', background: pendingAction === 'Punch In' ? '#166534' : '#991b1b', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }} onClick={confirmAndSubmit}>
                   {pendingAction === 'Punch In' ? '👊 Confirm Punch In' : '🚪 Confirm Punch Out'}
@@ -548,6 +601,14 @@ export default function App() {
           <select style={t.select} value={selectedUser} onChange={e => setSelectedUser(e.target.value)}>
             {USERS.map(u => <option key={u} value={u}>{u}</option>)}
           </select>
+
+          {/* ✅ Show active break indicator for selected user */}
+          {breakStarts[selectedUser] && (
+            <div style={{ background: '#fef9c3', border: '1px solid #fde047', borderRadius: '10px', padding: '8px 14px', marginBottom: '12px', fontSize: '0.85rem', color: '#854d0e', fontWeight: '600' }}>
+              ☕ {selectedUser} is on break — click End Break when ready
+            </div>
+          )}
+
           <label style={t.checkRow}>
             <input type="checkbox" checked={useManual} onChange={e => setUseManual(e.target.checked)} />
             Enter time manually
@@ -558,10 +619,12 @@ export default function App() {
               <input type="time" step="1" style={t.input} value={manualTime} onChange={e => setManualTime(e.target.value)} />
             </div>
           )}
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }}>
             <button style={{ ...btnGreen,  ...(loading ? btnDisabled : {}) }} onClick={() => handleActionClick('Punch In')}    disabled={loading}>👊 Punch In</button>
             <button style={{ ...btnRed,    ...(loading ? btnDisabled : {}) }} onClick={() => handleActionClick('Punch Out')}   disabled={loading}>🚪 Punch Out</button>
-            {!breakStart
+            {/* ✅ Per-user break button */}
+            {!breakStarts[selectedUser]
               ? <button style={{ ...btnAmber, ...(loading ? btnDisabled : {}) }} onClick={() => handleActionClick('Start Break')} disabled={loading}>☕ Start Break</button>
               : <button style={{ ...btnBlue,  ...(loading ? btnDisabled : {}) }} onClick={() => handleActionClick('End Break')}   disabled={loading}>▶ End Break</button>
             }
@@ -580,10 +643,9 @@ export default function App() {
         {/* ── DASHBOARD TAB ── */}
         {activeTab === 'dashboard' && (
           <>
-            {/* Row 1: Live Work Timers + Absent Users */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '0' }}>
 
-              {/* ── LIVE WORK TIMER ── */}
+              {/* Live Work Timer */}
               <div style={t.card}>
                 <div style={t.sectionTitle}>⏱ Live Work Timer</div>
                 {fetchLoading ? (
@@ -593,25 +655,24 @@ export default function App() {
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     {USERS.map(user => {
-                      const s        = attendanceStatus[user] || { status: 'OUT' };
-                      const isIN     = s.status === 'IN' && !s.onBreak;
-                      const onBreak  = s.onBreak;
-                      const timerMs  = liveTimers[user] || 0;
-                      const isOT     = timerMs > OVERTIME_HOURS * 3600 * 1000;
-                      const bg       = isOT ? (darkMode ? '#1f1200' : '#fff7ed') : isIN ? (darkMode ? '#0a1f0a' : '#f0fdf4') : onBreak ? (darkMode ? '#1c1a0a' : '#fefce8') : (darkMode ? '#162032' : '#f8fafc');
-                      const color    = isOT ? '#ea580c' : isIN ? '#166534' : onBreak ? '#854d0e' : '#94a3b8';
-                      const border   = isOT ? '#fed7aa' : isIN ? '#86efac' : onBreak ? '#fde047' : (darkMode ? '#334155' : '#e2e8f0');
-
+                      const s       = attendanceStatus[user] || { status: 'OUT' };
+                      const isIN    = s.status === 'IN' && !s.onBreak;
+                      const onBreak = s.onBreak;
+                      const timerMs = liveTimers[user] || 0;
+                      const isOT    = timerMs > OVERTIME_HOURS * 3600 * 1000;
+                      const bg      = isOT ? (darkMode ? '#1f1200' : '#fff7ed') : isIN ? (darkMode ? '#0a1f0a' : '#f0fdf4') : onBreak ? (darkMode ? '#1c1a0a' : '#fefce8') : (darkMode ? '#162032' : '#f8fafc');
+                      const color   = isOT ? '#ea580c' : isIN ? '#166534' : onBreak ? '#854d0e' : '#94a3b8';
+                      const border  = isOT ? '#fed7aa' : isIN ? '#86efac' : onBreak ? '#fde047' : (darkMode ? '#334155' : '#e2e8f0');
                       return (
                         <div key={user} style={{ background: bg, border: `1px solid ${border}`, borderRadius: '12px', padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div>
                             <div style={{ fontSize: '0.88rem', fontWeight: '700', color: darkMode ? '#e2e8f0' : '#1e293b' }}>{user}</div>
-                            <div style={{ fontSize: '0.75rem', color: color, fontWeight: '600', marginTop: '2px' }}>
+                            <div style={{ fontSize: '0.75rem', color, fontWeight: '600', marginTop: '2px' }}>
                               {isOT ? '🔥 OVERTIME' : isIN ? '🟢 Working' : onBreak ? '☕ On Break' : '⚫ Not In'}
                             </div>
                           </div>
                           <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: isIN ? '1.1rem' : '0.95rem', fontWeight: '800', color: color, animation: isIN ? 'timerPulse 2s infinite' : 'none', fontVariantNumeric: 'tabular-nums' }}>
+                            <div style={{ fontSize: isIN ? '1.1rem' : '0.95rem', fontWeight: '800', color, animation: isIN ? 'timerPulse 2s infinite' : 'none', fontVariantNumeric: 'tabular-nums' }}>
                               {timerMs > 0 ? formatLiveTimer(timerMs) : '--'}
                             </div>
                             {isOT && (
@@ -627,10 +688,10 @@ export default function App() {
                 )}
               </div>
 
-              {/* Right column: Absent + Overtime */}
+              {/* Right column */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
-                {/* ── ABSENT USERS ── */}
+                {/* Absent Users */}
                 <div style={t.card}>
                   <div style={t.sectionTitle}>🔴 Absent Today</div>
                   {fetchLoading ? (
@@ -655,7 +716,7 @@ export default function App() {
                   )}
                 </div>
 
-                {/* ── OVERTIME ALERT ── */}
+                {/* Overtime Alert */}
                 <div style={t.card}>
                   <div style={t.sectionTitle}>🔥 Overtime Alert</div>
                   {fetchLoading ? (
@@ -671,8 +732,8 @@ export default function App() {
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {overtimeUsers.map(user => {
-                        const timerMs  = liveTimers[user] || 0;
-                        const extraMs  = timerMs - OVERTIME_HOURS * 3600 * 1000;
+                        const timerMs = liveTimers[user] || 0;
+                        const extraMs = timerMs - OVERTIME_HOURS * 3600 * 1000;
                         return (
                           <div key={user} style={{ background: darkMode ? '#1f1200' : '#fff7ed', border: '1px solid #fed7aa', borderRadius: '10px', padding: '10px 14px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -711,10 +772,10 @@ export default function App() {
               ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px' }}>
                   {USERS.map(user => {
-                    const s       = attendanceStatus[user] || { status: 'OUT' };
-                    const isIN    = s.status === 'IN';
-                    const onBreak = s.onBreak;
-                    const bgColor = onBreak ? (darkMode ? '#1c1a0a' : '#fefce8') : isIN ? (darkMode ? '#0a1f0a' : '#f0fdf4') : (darkMode ? '#1f0a0a' : '#fef2f2');
+                    const s        = attendanceStatus[user] || { status: 'OUT' };
+                    const isIN     = s.status === 'IN';
+                    const onBreak  = s.onBreak;
+                    const bgColor  = onBreak ? (darkMode ? '#1c1a0a' : '#fefce8') : isIN ? (darkMode ? '#0a1f0a' : '#f0fdf4') : (darkMode ? '#1f0a0a' : '#fef2f2');
                     const dotColor = onBreak ? '#f59e0b' : isIN ? '#22c55e' : '#ef4444';
                     const label    = onBreak ? 'ON BREAK' : isIN ? 'IN' : 'OUT';
                     const labelClr = onBreak ? '#854d0e' : isIN ? '#166534' : '#991b1b';
@@ -725,7 +786,7 @@ export default function App() {
                           <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: dotColor, animation: isIN && !onBreak ? 'pulse 2s infinite' : 'none' }} />
                           <span style={{ fontSize: '0.88rem', fontWeight: '800', color: labelClr }}>{label}</span>
                         </div>
-                        {isIN && s.lastPunchIn && <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Since {s.lastPunchIn}</div>}
+                        {isIN  && s.lastPunchIn  && <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Since {s.lastPunchIn}</div>}
                         {!isIN && s.lastPunchOut && <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Left {s.lastPunchOut}</div>}
                         {!isIN && !s.lastPunchOut && <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Not yet in</div>}
                       </div>
@@ -755,8 +816,8 @@ export default function App() {
                     </thead>
                     <tbody>
                       {USERS.map((user, idx) => {
-                        const s   = todaySummary[user] || {};
-                        const att = attendanceStatus[user] || { status: 'OUT' };
+                        const s       = todaySummary[user] || {};
+                        const att     = attendanceStatus[user] || { status: 'OUT' };
                         const timerMs = liveTimers[user] || 0;
                         const isOT    = timerMs > OVERTIME_HOURS * 3600 * 1000;
                         return (
