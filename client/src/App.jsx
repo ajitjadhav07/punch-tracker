@@ -5,6 +5,7 @@ const USERS = ['Ajit Jadhav', 'Kiran Khade', 'Mruda Sogale', 'Sejal Pawar', 'San
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const LATE_HOUR = 9;
 const LATE_MINUTE = 30;
+const OVERTIME_HOURS = 8;
 
 function getLocalTime() {
   const now = new Date();
@@ -43,6 +44,16 @@ function formatDuration(ms) {
   return `${secs}s`;
 }
 
+function formatLiveTimer(ms) {
+  if (!ms || ms <= 0) return '0m 0s';
+  const totalSec = Math.floor(ms / 1000);
+  const hrs  = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  if (hrs > 0) return `${hrs}h ${mins}m ${secs}s`;
+  return `${mins}m ${secs}s`;
+}
+
 function isLateArrival(timeStr) {
   if (!timeStr) return false;
   try {
@@ -55,34 +66,44 @@ function isLateArrival(timeStr) {
     const min   = parseInt(parts[1]) || 0;
     if (isPM && hour !== 12) hour += 12;
     if (isAM && hour === 12) hour = 0;
-    if (hour > 12) return false; // PM punch = not late arrival
+    if (hour > 12) return false;
     return hour > LATE_HOUR || (hour === LATE_HOUR && min > LATE_MINUTE);
   } catch { return false; }
 }
 
-// Compute who is currently IN vs OUT
 function computeAttendanceStatus(punches) {
-  const todayStr = new Date().toDateString();
+  const todayStr    = new Date().toDateString();
   const todayPunches = punches
     .filter(p => new Date(p.createdAt).toDateString() === todayStr)
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
   const status = {};
-  USERS.forEach(u => { status[u] = { status: 'OUT', lastPunchIn: null, lastPunchOut: null, onBreak: false }; });
+  USERS.forEach(u => { status[u] = { status: 'OUT', lastPunchIn: null, lastPunchInTime: null, lastPunchOut: null, onBreak: false, totalMs: 0, lastInCreatedAt: null }; });
 
   todayPunches.forEach(p => {
     if (!status[p.user]) return;
-    if (p.label === 'Punch In')    { status[p.user].status = 'IN';     status[p.user].lastPunchIn  = p.time; status[p.user].onBreak = false; }
-    if (p.label === 'Punch Out')   { status[p.user].status = 'OUT';    status[p.user].lastPunchOut = p.time; }
-    if (p.label === 'Start Break') { status[p.user].onBreak = true; }
-    if (p.label === 'End Break')   { status[p.user].onBreak = false; }
+    if (p.label === 'Punch In') {
+      status[p.user].status          = 'IN';
+      status[p.user].lastPunchIn     = p.time;
+      status[p.user].lastInCreatedAt = new Date(p.createdAt);
+      status[p.user].onBreak         = false;
+    }
+    if (p.label === 'Punch Out') {
+      if (status[p.user].lastInCreatedAt) {
+        status[p.user].totalMs += new Date(p.createdAt) - status[p.user].lastInCreatedAt;
+        status[p.user].lastInCreatedAt = null;
+      }
+      status[p.user].status      = 'OUT';
+      status[p.user].lastPunchOut = p.time;
+    }
+    if (p.label === 'Start Break') status[p.user].onBreak = true;
+    if (p.label === 'End Break')   status[p.user].onBreak = false;
   });
   return status;
 }
 
-// Today summary per user
 function computeTodaySummary(punches) {
-  const todayStr = new Date().toDateString();
+  const todayStr    = new Date().toDateString();
   const todayPunches = punches
     .filter(p => new Date(p.createdAt).toDateString() === todayStr)
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
@@ -93,18 +114,12 @@ function computeTodaySummary(punches) {
   todayPunches.forEach(p => {
     if (!summary[p.user]) return;
     if (p.label === 'Punch In') {
-      if (!summary[p.user].punchIn) {
-        summary[p.user].punchIn = p.time;
-        summary[p.user].late    = isLateArrival(p.time);
-      }
+      if (!summary[p.user].punchIn) { summary[p.user].punchIn = p.time; summary[p.user].late = isLateArrival(p.time); }
       summary[p.user].lastIn = new Date(p.createdAt);
     }
     if (p.label === 'Punch Out') {
       summary[p.user].punchOut = p.time;
-      if (summary[p.user].lastIn) {
-        summary[p.user].totalMs += new Date(p.createdAt) - summary[p.user].lastIn;
-        summary[p.user].lastIn   = null;
-      }
+      if (summary[p.user].lastIn) { summary[p.user].totalMs += new Date(p.createdAt) - summary[p.user].lastIn; summary[p.user].lastIn = null; }
     }
   });
   return summary;
@@ -117,7 +132,7 @@ function computeShiftDurations(punches) {
       .filter(p => p.label === 'Punch In' && p.user === punch.user && p.date === punch.date && new Date(p.createdAt) < new Date(punch.createdAt))
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
     if (!matchingIn) return { ...punch, shiftDuration: null };
-    const diffMs   = new Date(punch.createdAt) - new Date(matchingIn.createdAt);
+    const diffMs = new Date(punch.createdAt) - new Date(matchingIn.createdAt);
     const totalSec = Math.floor(diffMs / 1000);
     const hrs  = Math.floor(totalSec / 3600);
     const mins = Math.floor((totalSec % 3600) / 60);
@@ -145,7 +160,6 @@ function computeDailySummary(punches) {
   return Object.values(summary).filter(s => s.totalMs > 0).sort((a, b) => b.date.localeCompare(a.date));
 }
 
-// ── Skeleton component
 function Skeleton({ width = '100%', height = '16px', borderRadius = '6px', style = {} }) {
   return (
     <div style={{
@@ -211,14 +225,15 @@ export default function App() {
   const [breakStart, setBreakStart]     = useState(null);
   const [activeTab, setActiveTab]       = useState('dashboard');
   const [darkMode, setDarkMode]         = useState(false);
-  const now = new Date();
-  const [reportMonth, setReportMonth]   = useState(MONTHS[now.getMonth()]);
-  const [reportYear, setReportYear]     = useState(String(now.getFullYear()));
-  const [reportUser, setReportUser]     = useState('All');
-  const [downloading, setDownloading]   = useState(false);
-  const [reportMsg, setReportMsg]       = useState(null);
+  const [liveTimers, setLiveTimers]     = useState({});
 
-  // Camera
+  const now = new Date();
+  const [reportMonth, setReportMonth] = useState(MONTHS[now.getMonth()]);
+  const [reportYear, setReportYear]   = useState(String(now.getFullYear()));
+  const [reportUser, setReportUser]   = useState('All');
+  const [downloading, setDownloading] = useState(false);
+  const [reportMsg, setReportMsg]     = useState(null);
+
   const [showCamera, setShowCamera]       = useState(false);
   const [cameraActive, setCameraActive]   = useState(false);
   const [capturedImage, setCapturedImage] = useState(null);
@@ -232,12 +247,32 @@ export default function App() {
 
   const t = getTheme(darkMode);
 
+  // Live clock
   useEffect(() => {
     const id = setInterval(() => setCurrentTime(getLocalTime()), 1000);
     return () => clearInterval(id);
   }, []);
 
+  // Fetch records
   useEffect(() => { fetchPunches(); }, []);
+
+  // Live timer — updates every second for IN users
+  useEffect(() => {
+    const id = setInterval(() => {
+      const status = computeAttendanceStatus(punches);
+      const timers = {};
+      USERS.forEach(user => {
+        const s = status[user];
+        if (s.status === 'IN' && s.lastInCreatedAt && !s.onBreak) {
+          timers[user] = Date.now() - s.lastInCreatedAt.getTime() + (s.totalMs || 0);
+        } else if (s.status === 'OUT') {
+          timers[user] = s.totalMs || 0;
+        }
+      });
+      setLiveTimers(timers);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [punches]);
 
   useEffect(() => {
     if (showCamera) getCameraStream();
@@ -359,7 +394,7 @@ export default function App() {
       const blob = await response.blob();
       const url  = window.URL.createObjectURL(blob);
       const a    = document.createElement('a');
-      a.href     = url;
+      a.href = url;
       a.download = `attendance-${reportMonth}-${reportYear}${reportUser !== 'All' ? '-' + reportUser.replace(' ', '_') : ''}.csv`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
@@ -374,14 +409,23 @@ export default function App() {
     catch { setMessage({ type: 'error', text: 'Failed to delete.' }); }
   }
 
-  const greeting    = getGreeting(currentTime.hour, null);
-  const todayStr    = new Date().toDateString();
-  const todayCount  = punches.filter(p => new Date(p.createdAt).toDateString() === todayStr).length;
-  const totalBreaks = punches.filter(p => p.label === 'End Break' && p.breakDuration && p.breakDuration !== '-').length;
+  const greeting         = getGreeting(currentTime.hour, null);
+  const todayStr         = new Date().toDateString();
+  const todayCount       = punches.filter(p => new Date(p.createdAt).toDateString() === todayStr).length;
   const attendanceStatus = computeAttendanceStatus(punches);
   const todaySummary     = computeTodaySummary(punches);
-  const inCount  = Object.values(attendanceStatus).filter(s => s.status === 'IN').length;
-  const outCount = Object.values(attendanceStatus).filter(s => s.status === 'OUT').length;
+  const inCount          = Object.values(attendanceStatus).filter(s => s.status === 'IN').length;
+  const outCount         = Object.values(attendanceStatus).filter(s => s.status === 'OUT').length;
+
+  // Absent users — not punched in at all today
+  const absentUsers = USERS.filter(u => !todaySummary[u]?.punchIn);
+
+  // Overtime users — worked more than 8 hours
+  const overtimeUsers = USERS.filter(u => {
+    const ms = liveTimers[u] || 0;
+    return ms > OVERTIME_HOURS * 3600 * 1000;
+  });
+
   const punchesWithDuration = computeShiftDurations(punches);
   const filtered = punchesWithDuration.filter(p => {
     const userMatch = filterUser === 'All' || (p.user && p.user === filterUser);
@@ -397,24 +441,18 @@ export default function App() {
     return { background: c.bg, color: c.color, borderRadius: '20px', padding: '3px 10px', fontSize: '0.78rem', fontWeight: '600', whiteSpace: 'nowrap' };
   };
 
-  const btnGreen   = { padding: '13px', background: '#dcfce7', color: '#166534', border: '1px solid #86efac', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' };
-  const btnRed     = { padding: '13px', background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' };
-  const btnAmber   = { padding: '13px', background: '#fef9c3', color: '#854d0e', border: '1px solid #fde047', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' };
-  const btnBlue    = { padding: '13px', background: '#dbeafe', color: '#1e40af', border: '1px solid #93c5fd', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' };
+  const btnGreen    = { padding: '13px', background: '#dcfce7', color: '#166534', border: '1px solid #86efac', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' };
+  const btnRed      = { padding: '13px', background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' };
+  const btnAmber    = { padding: '13px', background: '#fef9c3', color: '#854d0e', border: '1px solid #fde047', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' };
+  const btnBlue     = { padding: '13px', background: '#dbeafe', color: '#1e40af', border: '1px solid #93c5fd', borderRadius: '10px', fontWeight: '700', cursor: 'pointer', fontSize: '0.95rem' };
   const btnDisabled = { opacity: 0.45, cursor: 'not-allowed' };
 
   return (
     <div style={t.app}>
-      {/* Shimmer keyframes */}
       <style>{`
-        @keyframes shimmer {
-          0%   { background-position: -200% 0; }
-          100% { background-position:  200% 0; }
-        }
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50%       { opacity: 0.4; }
-        }
+        @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        @keyframes pulse   { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        @keyframes timerPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } }
       `}</style>
 
       {/* ── CAMERA MODAL ── */}
@@ -489,7 +527,7 @@ export default function App() {
         <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
           {fetchLoading ? (
             [1,2,3,4].map(i => (
-              <div key={i} style={{ ...t.statBox }}>
+              <div key={i} style={t.statBox}>
                 <Skeleton height="2rem" width="60%" style={{ margin: '0 auto 8px' }} />
                 <Skeleton height="0.75rem" width="80%" style={{ margin: '0 auto' }} />
               </div>
@@ -499,7 +537,7 @@ export default function App() {
               <div style={t.statBox}><div style={t.statNum}>{punches.length}</div><div style={t.statLabel}>Total Records</div></div>
               <div style={t.statBox}><div style={{ ...t.statNum, color: '#166534' }}>{todayCount}</div><div style={t.statLabel}>Today's Punches</div></div>
               <div style={t.statBox}><div style={{ ...t.statNum, color: '#3b82f6' }}>{inCount}</div><div style={t.statLabel}>Currently IN</div></div>
-              <div style={t.statBox}><div style={{ ...t.statNum, color: '#94a3b8' }}>{outCount}</div><div style={t.statLabel}>Currently OUT</div></div>
+              <div style={t.statBox}><div style={{ ...t.statNum, color: absentUsers.length > 0 ? '#ef4444' : '#94a3b8' }}>{absentUsers.length}</div><div style={t.statLabel}>Absent Today</div></div>
             </>
           )}
         </div>
@@ -542,6 +580,121 @@ export default function App() {
         {/* ── DASHBOARD TAB ── */}
         {activeTab === 'dashboard' && (
           <>
+            {/* Row 1: Live Work Timers + Absent Users */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '0' }}>
+
+              {/* ── LIVE WORK TIMER ── */}
+              <div style={t.card}>
+                <div style={t.sectionTitle}>⏱ Live Work Timer</div>
+                {fetchLoading ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {[1,2,3].map(i => <Skeleton key={i} height="52px" borderRadius="12px" />)}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {USERS.map(user => {
+                      const s        = attendanceStatus[user] || { status: 'OUT' };
+                      const isIN     = s.status === 'IN' && !s.onBreak;
+                      const onBreak  = s.onBreak;
+                      const timerMs  = liveTimers[user] || 0;
+                      const isOT     = timerMs > OVERTIME_HOURS * 3600 * 1000;
+                      const bg       = isOT ? (darkMode ? '#1f1200' : '#fff7ed') : isIN ? (darkMode ? '#0a1f0a' : '#f0fdf4') : onBreak ? (darkMode ? '#1c1a0a' : '#fefce8') : (darkMode ? '#162032' : '#f8fafc');
+                      const color    = isOT ? '#ea580c' : isIN ? '#166534' : onBreak ? '#854d0e' : '#94a3b8';
+                      const border   = isOT ? '#fed7aa' : isIN ? '#86efac' : onBreak ? '#fde047' : (darkMode ? '#334155' : '#e2e8f0');
+
+                      return (
+                        <div key={user} style={{ background: bg, border: `1px solid ${border}`, borderRadius: '12px', padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ fontSize: '0.88rem', fontWeight: '700', color: darkMode ? '#e2e8f0' : '#1e293b' }}>{user}</div>
+                            <div style={{ fontSize: '0.75rem', color: color, fontWeight: '600', marginTop: '2px' }}>
+                              {isOT ? '🔥 OVERTIME' : isIN ? '🟢 Working' : onBreak ? '☕ On Break' : '⚫ Not In'}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: isIN ? '1.1rem' : '0.95rem', fontWeight: '800', color: color, animation: isIN ? 'timerPulse 2s infinite' : 'none', fontVariantNumeric: 'tabular-nums' }}>
+                              {timerMs > 0 ? formatLiveTimer(timerMs) : '--'}
+                            </div>
+                            {isOT && (
+                              <div style={{ fontSize: '0.7rem', color: '#ea580c', fontWeight: '700' }}>
+                                +{formatDuration(timerMs - OVERTIME_HOURS * 3600 * 1000)} OT
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Right column: Absent + Overtime */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+                {/* ── ABSENT USERS ── */}
+                <div style={t.card}>
+                  <div style={t.sectionTitle}>🔴 Absent Today</div>
+                  {fetchLoading ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {[1,2].map(i => <Skeleton key={i} height="36px" borderRadius="10px" />)}
+                    </div>
+                  ) : absentUsers.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '16px', background: darkMode ? '#0a1f0a' : '#f0fdf4', borderRadius: '12px' }}>
+                      <div style={{ fontSize: '1.5rem', marginBottom: '4px' }}>🎉</div>
+                      <div style={{ fontSize: '0.88rem', color: '#166534', fontWeight: '700' }}>Everyone is present!</div>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {absentUsers.map(user => (
+                        <div key={user} style={{ background: darkMode ? '#1f0a0a' : '#fff5f5', border: '1px solid #fca5a5', borderRadius: '10px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444', flexShrink: 0 }} />
+                          <div style={{ fontSize: '0.9rem', fontWeight: '600', color: darkMode ? '#fca5a5' : '#991b1b' }}>{user}</div>
+                          <div style={{ marginLeft: 'auto', fontSize: '0.75rem', color: '#94a3b8' }}>Not punched in</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* ── OVERTIME ALERT ── */}
+                <div style={t.card}>
+                  <div style={t.sectionTitle}>🔥 Overtime Alert</div>
+                  {fetchLoading ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {[1].map(i => <Skeleton key={i} height="36px" borderRadius="10px" />)}
+                    </div>
+                  ) : overtimeUsers.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '16px', background: darkMode ? '#162032' : '#f8fafc', borderRadius: '12px' }}>
+                      <div style={{ fontSize: '1.5rem', marginBottom: '4px' }}>✅</div>
+                      <div style={{ fontSize: '0.88rem', color: darkMode ? '#94a3b8' : '#64748b', fontWeight: '600' }}>No overtime today</div>
+                      <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '2px' }}>Triggers after {OVERTIME_HOURS} hours</div>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {overtimeUsers.map(user => {
+                        const timerMs  = liveTimers[user] || 0;
+                        const extraMs  = timerMs - OVERTIME_HOURS * 3600 * 1000;
+                        return (
+                          <div key={user} style={{ background: darkMode ? '#1f1200' : '#fff7ed', border: '1px solid #fed7aa', borderRadius: '10px', padding: '10px 14px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <div style={{ fontSize: '16px' }}>🔥</div>
+                                <div style={{ fontSize: '0.9rem', fontWeight: '700', color: darkMode ? '#fed7aa' : '#9a3412' }}>{user}</div>
+                              </div>
+                              <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontSize: '0.88rem', fontWeight: '800', color: '#ea580c' }}>{formatLiveTimer(timerMs)}</div>
+                                <div style={{ fontSize: '0.72rem', color: '#f97316', fontWeight: '600' }}>+{formatDuration(extraMs)} overtime</div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            </div>
+
             {/* Live Attendance Status */}
             <div style={t.card}>
               <div style={t.sectionTitle}>🟢 Live Attendance Status</div>
@@ -558,10 +711,10 @@ export default function App() {
               ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '12px' }}>
                   {USERS.map(user => {
-                    const s = attendanceStatus[user] || { status: 'OUT' };
-                    const isIN     = s.status === 'IN';
-                    const onBreak  = s.onBreak;
-                    const bgColor  = onBreak ? (darkMode ? '#1c1a0a' : '#fefce8') : isIN ? (darkMode ? '#0a1f0a' : '#f0fdf4') : (darkMode ? '#1f0a0a' : '#fef2f2');
+                    const s       = attendanceStatus[user] || { status: 'OUT' };
+                    const isIN    = s.status === 'IN';
+                    const onBreak = s.onBreak;
+                    const bgColor = onBreak ? (darkMode ? '#1c1a0a' : '#fefce8') : isIN ? (darkMode ? '#0a1f0a' : '#f0fdf4') : (darkMode ? '#1f0a0a' : '#fef2f2');
                     const dotColor = onBreak ? '#f59e0b' : isIN ? '#22c55e' : '#ef4444';
                     const label    = onBreak ? 'ON BREAK' : isIN ? 'IN' : 'OUT';
                     const labelClr = onBreak ? '#854d0e' : isIN ? '#166534' : '#991b1b';
@@ -572,15 +725,9 @@ export default function App() {
                           <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: dotColor, animation: isIN && !onBreak ? 'pulse 2s infinite' : 'none' }} />
                           <span style={{ fontSize: '0.88rem', fontWeight: '800', color: labelClr }}>{label}</span>
                         </div>
-                        {isIN && s.lastPunchIn && (
-                          <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Since {s.lastPunchIn}</div>
-                        )}
-                        {!isIN && s.lastPunchOut && (
-                          <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Left {s.lastPunchOut}</div>
-                        )}
-                        {!isIN && !s.lastPunchOut && (
-                          <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Not yet in</div>
-                        )}
+                        {isIN && s.lastPunchIn && <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Since {s.lastPunchIn}</div>}
+                        {!isIN && s.lastPunchOut && <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Left {s.lastPunchOut}</div>}
+                        {!isIN && !s.lastPunchOut && <div style={{ fontSize: '0.75rem', color: darkMode ? '#64748b' : '#94a3b8' }}>Not yet in</div>}
                       </div>
                     );
                   })}
@@ -588,47 +735,48 @@ export default function App() {
               )}
             </div>
 
-            {/* Today's Summary Card */}
+            {/* Today's Summary */}
             <div style={t.card}>
               <div style={t.sectionTitle}>📅 Today's Summary</div>
               {fetchLoading ? (
-                <div>
-                  {[1,2,3].map(i => (
-                    <div key={i} style={{ display: 'flex', gap: '12px', padding: '12px 0', borderBottom: `1px solid ${darkMode ? '#1e293b' : '#f1f5f9'}` }}>
-                      <Skeleton height="14px" width="120px" />
-                      <Skeleton height="14px" width="80px" />
-                      <Skeleton height="14px" width="80px" />
-                      <Skeleton height="14px" width="80px" />
-                    </div>
-                  ))}
-                </div>
+                <div>{[1,2,3].map(i => (
+                  <div key={i} style={{ display: 'flex', gap: '12px', padding: '12px 0', borderBottom: `1px solid ${darkMode ? '#1e293b' : '#f1f5f9'}` }}>
+                    <Skeleton height="14px" width="120px" />
+                    <Skeleton height="14px" width="80px" />
+                    <Skeleton height="14px" width="80px" />
+                    <Skeleton height="14px" width="80px" />
+                  </div>
+                ))}</div>
               ) : (
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
-                      <tr>
-                        {['User', 'Punch In', 'Punch Out', 'Hours Worked', 'Status'].map(h => <th key={h} style={t.th}>{h}</th>)}
-                      </tr>
+                      <tr>{['User','Punch In','Punch Out','Hours Worked','Live Timer','Status'].map(h => <th key={h} style={t.th}>{h}</th>)}</tr>
                     </thead>
                     <tbody>
                       {USERS.map((user, idx) => {
                         const s   = todaySummary[user] || {};
                         const att = attendanceStatus[user] || { status: 'OUT' };
+                        const timerMs = liveTimers[user] || 0;
+                        const isOT    = timerMs > OVERTIME_HOURS * 3600 * 1000;
                         return (
                           <tr key={user} style={idx % 2 === 0 ? t.trEven : t.trOdd}>
                             <td style={{ ...t.td, fontWeight: '700' }}>
                               {user}
-                              {s.late && (
-                                <span style={{ marginLeft: '6px', background: '#fee2e2', color: '#991b1b', borderRadius: '10px', padding: '2px 8px', fontSize: '0.7rem', fontWeight: '700' }}>
-                                  ⚠️ LATE
-                                </span>
-                              )}
+                              {s.late && <span style={{ marginLeft: '6px', background: '#fee2e2', color: '#991b1b', borderRadius: '10px', padding: '2px 8px', fontSize: '0.7rem', fontWeight: '700' }}>⚠️ LATE</span>}
                             </td>
                             <td style={{ ...t.td, color: s.late ? '#ef4444' : '#166534', fontWeight: '600' }}>{s.punchIn || '-'}</td>
                             <td style={{ ...t.td, color: '#94a3b8' }}>{s.punchOut || '-'}</td>
                             <td style={t.td}>
                               {s.totalMs > 0
                                 ? <span style={{ background: '#dbeafe', color: '#1e40af', borderRadius: '20px', padding: '3px 10px', fontSize: '0.82rem', fontWeight: '700' }}>🕐 {formatDuration(s.totalMs)}</span>
+                                : <span style={{ color: '#94a3b8' }}>-</span>}
+                            </td>
+                            <td style={t.td}>
+                              {timerMs > 0
+                                ? <span style={{ color: isOT ? '#ea580c' : att.status === 'IN' ? '#166534' : '#94a3b8', fontWeight: '700', fontSize: '0.88rem', fontVariantNumeric: 'tabular-nums' }}>
+                                    {isOT ? '🔥' : att.status === 'IN' ? '⏱' : '✅'} {formatLiveTimer(timerMs)}
+                                  </span>
                                 : <span style={{ color: '#94a3b8' }}>-</span>}
                             </td>
                             <td style={t.td}>
@@ -663,18 +811,16 @@ export default function App() {
               </select>
             </div>
             {fetchLoading ? (
-              <div>
-                {[1,2,3,4,5].map(i => (
-                  <div key={i} style={{ display: 'flex', gap: '16px', padding: '14px 12px', borderBottom: `1px solid ${darkMode ? '#1e293b' : '#f1f5f9'}`, alignItems: 'center' }}>
-                    <Skeleton height="14px" width="20px" />
-                    <Skeleton height="14px" width="100px" />
-                    <Skeleton height="22px" width="70px" borderRadius="20px" />
-                    <Skeleton height="14px" width="80px" />
-                    <Skeleton height="14px" width="120px" />
-                    <Skeleton height="22px" width="80px" borderRadius="20px" />
-                  </div>
-                ))}
-              </div>
+              <div>{[1,2,3,4,5].map(i => (
+                <div key={i} style={{ display: 'flex', gap: '16px', padding: '14px 12px', borderBottom: `1px solid ${darkMode ? '#1e293b' : '#f1f5f9'}`, alignItems: 'center' }}>
+                  <Skeleton height="14px" width="20px" />
+                  <Skeleton height="14px" width="100px" />
+                  <Skeleton height="22px" width="70px" borderRadius="20px" />
+                  <Skeleton height="14px" width="80px" />
+                  <Skeleton height="14px" width="120px" />
+                  <Skeleton height="22px" width="80px" borderRadius="20px" />
+                </div>
+              ))}</div>
             ) : filtered.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>No records found.</div>
             ) : (
