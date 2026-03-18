@@ -12,7 +12,6 @@ const s3 = new AWS.S3({
 
 const S3_BUCKET = process.env.AWS_S3_BUCKET || 'punchin-screenshots-bucket';
 
-// Build date folder: 2026/March/17
 function getDateFolder() {
   const now   = new Date();
   const year  = now.getFullYear();
@@ -21,15 +20,12 @@ function getDateFolder() {
   return `${year}/${month}/${day}`;
 }
 
-// CSV header row
 const CSV_HEADER = 'PunchId,User,Type,Time,Date,Timezone,Source,BreakDuration,ImageUrl,CreatedAt\n';
 
-// Convert one punch doc to a CSV row
 function docToCsvRow(doc, docId) {
   const escape = (val) => {
     if (!val) return '';
     const str = String(val);
-    // wrap in quotes if contains comma or newline
     return str.includes(',') || str.includes('\n') ? `"${str}"` : str;
   };
   return [
@@ -46,22 +42,17 @@ function docToCsvRow(doc, docId) {
   ].join(',') + '\n';
 }
 
-// Upload selfie image to S3
 async function uploadImageToS3(imageBase64) {
   try {
     const base64Data  = imageBase64.replace(/^data:image\/\w+;base64,/, '');
     const imageBuffer = Buffer.from(base64Data, 'base64');
     const folder      = getDateFolder();
     const fileName    = `${folder}/punch-${uuidv4()}.jpg`;
-
     const result = await s3.upload({
-      Bucket:      S3_BUCKET,
-      Key:         fileName,
-      Body:        imageBuffer,
-      ContentType: 'image/jpeg',
+      Bucket: S3_BUCKET, Key: fileName,
+      Body: imageBuffer, ContentType: 'image/jpeg',
     }).promise();
-
-    console.log('✅ Image uploaded to S3:', result.Location);
+    console.log('✅ Image uploaded:', result.Location);
     return result.Location;
   } catch (err) {
     console.error('❌ Image upload error:', err.message);
@@ -69,84 +60,49 @@ async function uploadImageToS3(imageBase64) {
   }
 }
 
-// Append new row to today's CSV file in S3
 async function appendToCsv(doc, docId) {
   try {
     const folder  = getDateFolder();
     const csvKey  = `reports/${folder}/attendance.csv`;
     const newRow  = docToCsvRow(doc, docId);
-
-    // Try to get existing CSV
     let existingContent = '';
     try {
-      const existing = await s3.getObject({
-        Bucket: S3_BUCKET,
-        Key:    csvKey,
-      }).promise();
+      const existing = await s3.getObject({ Bucket: S3_BUCKET, Key: csvKey }).promise();
       existingContent = existing.Body.toString('utf-8');
-      console.log(`📄 Found existing CSV: ${csvKey}`);
-    } catch (err) {
-      // File doesn't exist yet — start fresh with header
+    } catch {
       existingContent = CSV_HEADER;
-      console.log(`📄 Creating new CSV: ${csvKey}`);
     }
-
-    // Append new row
-    const updatedContent = existingContent + newRow;
-
-    // Save back to S3
     await s3.putObject({
-      Bucket:      S3_BUCKET,
-      Key:         csvKey,
-      Body:        updatedContent,
-      ContentType: 'text/csv',
+      Bucket: S3_BUCKET, Key: csvKey,
+      Body: existingContent + newRow, ContentType: 'text/csv',
     }).promise();
-
-    console.log(`✅ CSV updated: reports/${folder}/attendance.csv`);
-    return true;
+    console.log(`✅ CSV updated: ${csvKey}`);
   } catch (err) {
     console.error('❌ CSV update error:', err.message);
-    return false;
   }
 }
 
-// ── POST /api/punch
+// POST /api/punch
 router.post('/punch', async (req, res) => {
   try {
     const collection = await connectDB();
-    const {
-      time, date, timezone, source,
-      label, user, breakDuration, imageBase64
-    } = req.body;
+    const { time, date, timezone, source, label, user, breakDuration, imageBase64 } = req.body;
 
-    // 1. Upload selfie image to S3
     let imageUrl = null;
-    if (imageBase64) {
-      imageUrl = await uploadImageToS3(imageBase64);
-    }
+    if (imageBase64) imageUrl = await uploadImageToS3(imageBase64);
 
-    // 2. Build document
     const id  = `punch::${uuidv4()}`;
     const doc = {
-      type:          'punch',
-      time:          time          || '',
-      date:          date          || '',
-      timezone:      timezone      || '',
-      source:        source        || 'auto',
-      label:         label         || 'Punch In',
-      user:          user          || 'Unknown',
+      type: 'punch', time: time || '', date: date || '',
+      timezone: timezone || '', source: source || 'auto',
+      label: label || 'Punch In', user: user || 'Unknown',
       breakDuration: breakDuration || null,
-      imageUrl:      imageUrl,
-      createdAt:     new Date().toISOString(),
+      imageUrl: imageUrl, createdAt: new Date().toISOString(),
     };
 
-    // 3. Save to Couchbase
     await collection.insert(id, doc);
-    console.log(`✅ Couchbase saved: ${user} | ${label}`);
-
-    // 4. Append to today's CSV in S3
-    const cleanId = id.replace('punch::', 'punch-');
-    await appendToCsv(doc, cleanId);
+    console.log(`✅ Couchbase: ${user} | ${label}`);
+    await appendToCsv(doc, id.replace('punch::', 'punch-'));
 
     res.status(201).json({ success: true, id, doc });
   } catch (err) {
@@ -155,12 +111,11 @@ router.post('/punch', async (req, res) => {
   }
 });
 
-// ── GET /api/punches
+// GET /api/punches
 router.get('/punches', async (req, res) => {
   try {
     const cluster    = await getCluster();
     const bucketName = process.env.COUCHBASE_BUCKET;
-
     const query = `
       SELECT META().id, time, date, timezone, source,
              label, user, breakDuration, imageUrl, createdAt
@@ -168,36 +123,27 @@ router.get('/punches', async (req, res) => {
       WHERE type = 'punch'
       ORDER BY createdAt DESC
     `;
-
     const result  = await cluster.query(query);
     const punches = result.rows;
 
-    // Calculate shift duration per Punch Out row
     const processed = punches.map(punch => {
       if (punch.label !== 'Punch Out') return { ...punch, shiftDuration: null };
-
       const matchingIn = punches
         .filter(p =>
-          p.label === 'Punch In' &&
-          p.user  === punch.user &&
-          p.date  === punch.date &&
-          new Date(p.createdAt) < new Date(punch.createdAt)
+          p.label === 'Punch In' && p.user === punch.user &&
+          p.date  === punch.date && new Date(p.createdAt) < new Date(punch.createdAt)
         )
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
-
       if (!matchingIn) return { ...punch, shiftDuration: null };
-
       const diffMs   = new Date(punch.createdAt) - new Date(matchingIn.createdAt);
       const totalSec = Math.floor(diffMs / 1000);
-      const hrs      = Math.floor(totalSec / 3600);
-      const mins     = Math.floor((totalSec % 3600) / 60);
-      const secs     = totalSec % 60;
-
+      const hrs  = Math.floor(totalSec / 3600);
+      const mins = Math.floor((totalSec % 3600) / 60);
+      const secs = totalSec % 60;
       let shiftDuration = '';
       if (hrs > 0)       shiftDuration = `${hrs}h ${mins}m`;
       else if (mins > 0) shiftDuration = `${mins}m ${secs}s`;
       else               shiftDuration = `${secs}s`;
-
       return { ...punch, shiftDuration };
     });
 
@@ -208,7 +154,53 @@ router.get('/punches', async (req, res) => {
   }
 });
 
-// ── DELETE /api/punch/:id
+// GET /api/report/monthly?month=March&year=2026&user=All
+router.get('/report/monthly', async (req, res) => {
+  try {
+    const cluster    = await getCluster();
+    const bucketName = process.env.COUCHBASE_BUCKET;
+    const { month, year, user } = req.query;
+
+    let query = `
+      SELECT META().id, time, date, timezone, source,
+             label, user, breakDuration, imageUrl, createdAt
+      FROM \`${bucketName}\`._default._default
+      WHERE type = 'punch'
+      AND date LIKE '%${month}%'
+      AND date LIKE '%${year}%'
+    `;
+    if (user && user !== 'All') {
+      query += ` AND user = '${user}'`;
+    }
+    query += ` ORDER BY createdAt ASC`;
+
+    const result  = await cluster.query(query);
+    const punches = result.rows;
+
+    if (punches.length === 0) {
+      return res.status(404).json({ success: false, error: 'No records found for this month' });
+    }
+
+    // Build CSV content
+    let csv = CSV_HEADER;
+    punches.forEach(punch => {
+      csv += docToCsvRow(punch, punch.id || '');
+    });
+
+    // Send CSV as download
+    const fileName = `attendance-${month}-${year}${user && user !== 'All' ? '-' + user.replace(' ', '_') : ''}.csv`;
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(csv);
+
+    console.log(`✅ Monthly report downloaded: ${fileName} (${punches.length} records)`);
+  } catch (err) {
+    console.error('Error generating report:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/punch/:id
 router.delete('/punch/:id', async (req, res) => {
   try {
     const collection = await connectDB();
